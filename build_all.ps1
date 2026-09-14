@@ -7,7 +7,9 @@ $White = 'White'
 
 # OS/ARCH matrix
 $osList = @('windows', 'linux', 'darwin', 'freebsd')
-$archList = @('amd64', 'arm64', '386', 'arm', 'loong64')
+$archList = @('amd64', 'arm64', '386', 'arm', 'loong64', 'riscv64', 's390x', 'ppc64', 'ppc64le', 'mips', 'mipsle', 'mips64', 'mips64le')
+# Architectures that are only released for Linux
+$linuxOnlyArchList = @('loong64', 'riscv64', 's390x', 'ppc64', 'ppc64le', 'mips', 'mipsle', 'mips64', 'mips64le')
 
 # Ensure build directory
 $buildDir = Join-Path -Path (Get-Location) -ChildPath 'build'
@@ -28,10 +30,10 @@ $failedBuilds = @()
 
 foreach ($goos in $osList) {
     foreach ($goarch in $archList) {
-        # Skip loong64 outside Linux and existing unsupported combinations.
+        # Skip Linux-only architectures elsewhere and existing unsupported combinations.
         if ((($goos -eq 'windows') -and ($goarch -eq 'arm')) -or
             (($goos -eq 'darwin') -and (($goarch -eq '386') -or ($goarch -eq 'arm'))) -or
-            (($goos -ne 'linux') -and ($goarch -eq 'loong64'))) {
+            (($goos -ne 'linux') -and ($linuxOnlyArchList -contains $goarch))) {
             continue
         }
 

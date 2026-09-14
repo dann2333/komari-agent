@@ -278,6 +278,19 @@ install_dependencies
  
 
 # Architecture detection with platform-specific support
+# 读取 ELF 头的 EI_DATA 字节判断字节序: 1 = 小端, 2 = 大端, 无法判断时输出空
+elf_data_encoding() {
+    for probe in /bin/sh /proc/self/exe; do
+        [ -r "$probe" ] || continue
+        encoding=$(od -An -tu1 -j 5 -N 1 "$probe" 2>/dev/null | tr -d ' \n')
+        if [ "$encoding" = "1" ] || [ "$encoding" = "2" ]; then
+            echo "$encoding"
+            return 0
+        fi
+    done
+    return 1
+}
+
 arch=$(uname -m)
 case $arch in
     x86_64)
@@ -288,6 +301,31 @@ case $arch in
         ;;
     loongarch64|loong64)
         arch="loong64"
+        ;;
+    riscv64|s390x|ppc64|ppc64le|mips|mipsel|mipsle|mips64|mips64el|mips64le)
+        # 这些架构只发布 Linux 版本
+        if [ "$os_name" != "linux" ]; then
+            log_error "$arch architecture is only supported on linux"
+            exit 1
+        fi
+        case $arch in
+            mips|mips64)
+                # uname 无法区分 MIPS 字节序, 通过 ELF 头判断, 判断不出时按更常见的小端处理
+                encoding=$(elf_data_encoding)
+                if [ "$encoding" != "2" ]; then
+                    if [ -z "$encoding" ]; then
+                        log_warning "Unable to detect MIPS endianness, assuming little-endian."
+                    fi
+                    arch="${arch}le"
+                fi
+                ;;
+            mipsel)
+                arch="mipsle"
+                ;;
+            mips64el)
+                arch="mips64le"
+                ;;
+        esac
         ;;
     i386|i686)
         # x86 (32-bit) support

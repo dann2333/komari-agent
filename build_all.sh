@@ -8,7 +8,20 @@ NC='\033[0m' # 无颜色
 
 # 定义操作系统和架构列表
 OS_LIST=("windows" "linux" "darwin" "freebsd")
-ARCH_LIST=("amd64" "arm64" "386" "arm" "loong64")
+ARCH_LIST=("amd64" "arm64" "386" "arm" "loong64" "riscv64" "s390x" "ppc64" "ppc64le" "mips" "mipsle" "mips64" "mips64le")
+# 仅 Linux 提供的架构
+LINUX_ONLY_ARCH_LIST=("loong64" "riscv64" "s390x" "ppc64" "ppc64le" "mips" "mipsle" "mips64" "mips64le")
+
+is_linux_only_arch() {
+  local candidate="$1"
+  local linux_only
+  for linux_only in "${LINUX_ONLY_ARCH_LIST[@]}"; do
+    if [ "$candidate" = "$linux_only" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 # 创建构建目录
 mkdir -p ./build
@@ -22,10 +35,10 @@ FAILED_BUILDS=()
 # 遍历操作系统和架构组合
 for GOOS in "${OS_LIST[@]}"; do
   for GOARCH in "${ARCH_LIST[@]}"; do
-    # 排除仅由 Linux 支持的 loong64，以及 windows/arm、darwin/386 和 darwin/arm
+    # 排除仅由 Linux 支持的架构，以及 windows/arm、darwin/386 和 darwin/arm
     if { [ "$GOOS" = "windows" ] && [ "$GOARCH" = "arm" ]; } || \
        { [ "$GOOS" = "darwin" ] && { [ "$GOARCH" = "386" ] || [ "$GOARCH" = "arm" ]; }; } || \
-       { [ "$GOOS" != "linux" ] && [ "$GOARCH" = "loong64" ]; }; then
+       { [ "$GOOS" != "linux" ] && is_linux_only_arch "$GOARCH"; }; then
       continue
     fi
 
