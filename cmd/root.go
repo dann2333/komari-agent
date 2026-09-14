@@ -35,7 +35,9 @@ var RootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Notification helpers must not load the service's config or credentials.
 		if flags.ShowWarning {
-			ShowToast()
+			if !flags.DisableSecurityWarning {
+				ShowToast()
+			}
 			return nil
 		}
 		loadFromEnv() // 从环境变量加载配置，覆盖解析
@@ -52,12 +54,20 @@ var RootCmd = &cobra.Command{
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
+		// 更新源，允许指向自建镜像或 fork，避免被拉回默认仓库
+		if err := update.SetReleaseSource(flags.UpdateRepo, flags.UpdateAPIURL); err != nil {
+			return err
+		}
 		// 捕获中止信号，优雅退出
 		stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
 		stopWarning := func() {}
-		if !flags.DisableWebSsh {
+		switch {
+		case flags.DisableSecurityWarning:
+			// 清理此前版本或此前运行留下的警告，避免禁用后仍然显示
+			removeSecurityWarning()
+		case !flags.DisableWebSsh:
 			stopWarning = startSecurityWarning(stopCtx)
 		}
 		defer stopWarning()
@@ -164,7 +174,10 @@ func init() {
 	//RootCmd.MarkPersistentFlagRequired("endpoint")
 	RootCmd.PersistentFlags().StringVar(&flags.AutoDiscoveryKey, "auto-discovery", "", "Auto discovery key for the agent")
 	RootCmd.PersistentFlags().BoolVar(&flags.DisableAutoUpdate, "disable-auto-update", false, "Disable automatic updates")
+	RootCmd.PersistentFlags().StringVar(&flags.UpdateRepo, "update-repo", "", "Release repository used for self-update, formatted as owner/name")
+	RootCmd.PersistentFlags().StringVar(&flags.UpdateAPIURL, "update-api-url", "", "Base URL of the GitHub-compatible API used for self-update (e.g. https://ghe.example.com/api/v3)")
 	RootCmd.PersistentFlags().BoolVar(&flags.DisableWebSsh, "disable-web-ssh", false, "Disable remote control(web ssh and rce)")
+	RootCmd.PersistentFlags().BoolVar(&flags.DisableSecurityWarning, "disable-security-warning", false, "Disable the security warning notice on every platform (Linux MOTD, Windows toast)")
 	//RootCmd.PersistentFlags().BoolVar(&flags.MemoryModeAvailable, "memory-mode-available", false, "[deprecated]Report memory as available instead of used.")
 	RootCmd.PersistentFlags().Float64VarP(&flags.Interval, "interval", "i", 3.0, "Interval in seconds")
 	RootCmd.PersistentFlags().BoolVarP(&flags.IgnoreUnsafeCert, "ignore-unsafe-cert", "u", false, "Ignore unsafe certificate errors")

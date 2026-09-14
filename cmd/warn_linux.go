@@ -48,6 +48,18 @@ func startSecurityWarning(ctx context.Context) func() {
 	return cleanup
 }
 
+func removeSecurityWarning() {
+	removeLegacyUpdateMOTDWarning(legacyUpdateMOTDPath)
+	removed, err := uninstallMOTDWarning(linuxMOTDPath)
+	if err != nil {
+		log.Printf("[warn] could not remove MOTD warning: %v", err)
+		return
+	}
+	if removed {
+		log.Printf("[info] security warning disabled; MOTD warning removed")
+	}
+}
+
 func removeLegacyUpdateMOTDWarning(path string) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -138,6 +150,28 @@ func installMOTDWarning(path string, warning securityWarning) (func(), error) {
 			}
 		})
 	}, nil
+}
+
+// uninstallMOTDWarning 删除 MOTD 中由 Komari 写入的警告，保留其余内容。
+func uninstallMOTDWarning(path string) (bool, error) {
+	file, err := readMOTD(path)
+	if err != nil {
+		return false, err
+	}
+	if !file.exists {
+		return false, nil
+	}
+	content, found, err := removeMOTDWarning(file.original)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if err := writeMOTD(file, []byte(content)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func renderMOTDWarning(warning securityWarning) string {

@@ -202,3 +202,43 @@ func testRelease(tag string, prerelease, draft bool, publishedAt time.Time, asse
 		Assets:      assets,
 	}
 }
+
+// TestSetReleaseSource 验证自更新发布源可以被覆盖，并且非法输入不会改动默认值
+func TestSetReleaseSource(t *testing.T) {
+	originalRepo, originalAPI := Repo, apiBaseURL
+	t.Cleanup(func() { Repo, apiBaseURL = originalRepo, originalAPI })
+
+	if err := SetReleaseSource("", ""); err != nil {
+		t.Fatalf("empty configuration should keep defaults: %v", err)
+	}
+	if Repo != originalRepo || apiBaseURL != defaultGitHubAPIBaseURL || enterpriseBaseURL() != "" {
+		t.Fatalf("defaults were changed: %q, %q", Repo, apiBaseURL)
+	}
+
+	if err := SetReleaseSource("someone/komari-agent", "https://ghe.example.com/api/v3/"); err != nil {
+		t.Fatal(err)
+	}
+	if Repo != "someone/komari-agent" {
+		t.Fatalf("unexpected repo: %q", Repo)
+	}
+	if apiBaseURL != "https://ghe.example.com/api/v3" {
+		t.Fatalf("unexpected API base URL: %q", apiBaseURL)
+	}
+	if enterpriseBaseURL() != "https://ghe.example.com/api/v3/" {
+		t.Fatalf("unexpected enterprise base URL: %q", enterpriseBaseURL())
+	}
+
+	for _, invalid := range []string{"komari-agent", "owner/", "/name", "a/b/c"} {
+		if err := SetReleaseSource(invalid, ""); err == nil {
+			t.Fatalf("accepted invalid repo %q", invalid)
+		}
+	}
+	for _, invalid := range []string{"ghe.example.com", "ftp://ghe.example.com", "https://"} {
+		if err := SetReleaseSource("", invalid); err == nil {
+			t.Fatalf("accepted invalid API base URL %q", invalid)
+		}
+	}
+	if Repo != "someone/komari-agent" || apiBaseURL != "https://ghe.example.com/api/v3" {
+		t.Fatalf("invalid input changed the configured source: %q, %q", Repo, apiBaseURL)
+	}
+}

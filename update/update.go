@@ -20,14 +20,64 @@ import (
 
 var (
 	CurrentVersion string = "0.0.1"
-	Repo           string = "komari-monitor/komari-agent"
+	// Repo 为自更新使用的发布仓库，默认指向本项目的 release。
+	Repo string = "dann2333/komari-agent"
+	// apiBaseURL 为拉取 release 时使用的 GitHub 兼容 API 基地址。
+	apiBaseURL string = defaultGitHubAPIBaseURL
 )
 
 const (
-	snapshotVersionPrefix = "Snapshot-"
-	containerMarkerPath   = "/.komari-agent-container"
-	githubAPIBaseURL      = "https://api.github.com"
+	snapshotVersionPrefix   = "Snapshot-"
+	containerMarkerPath     = "/.komari-agent-container"
+	defaultGitHubAPIBaseURL = "https://api.github.com"
 )
+
+// SetReleaseSource 配置自更新使用的发布源。
+// repo 形如 owner/name，为空表示保留默认仓库；
+// apiBase 为 GitHub 兼容 API 的基地址（GitHub Enterprise 需填写到 /api/v3），为空表示使用 GitHub 官方 API。
+func SetReleaseSource(repo, apiBase string) error {
+	repo = strings.TrimSpace(repo)
+	apiBase = strings.TrimSpace(apiBase)
+	if repo != "" {
+		if _, _, err := splitRepoSlug(repo); err != nil {
+			return err
+		}
+		Repo = repo
+	}
+	if apiBase != "" {
+		normalized, err := normalizeAPIBaseURL(apiBase)
+		if err != nil {
+			return err
+		}
+		apiBaseURL = normalized
+	}
+	return nil
+}
+
+func normalizeAPIBaseURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid update API base URL %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("invalid update API base URL %q: expected an http or https URL", raw)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("invalid update API base URL %q: missing host", raw)
+	}
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+// enterpriseBaseURL 返回传给 selfupdate 的基地址，使用官方 API 时返回空字符串。
+func enterpriseBaseURL() string {
+	if apiBaseURL == defaultGitHubAPIBaseURL {
+		return ""
+	}
+	return apiBaseURL + "/"
+}
 
 type buildTrack int
 
@@ -157,7 +207,7 @@ func listGitHubReleases(owner, repo string) ([]githubRelease, error) {
 	for page := 1; ; page++ {
 		endpoint := fmt.Sprintf(
 			"%s/repos/%s/%s/releases?per_page=100&page=%d",
-			githubAPIBaseURL,
+			apiBaseURL,
 			url.PathEscape(owner),
 			url.PathEscape(repo),
 			page,
@@ -321,7 +371,7 @@ func CheckAndUpdate() error {
 	log.Println("Checking update...")
 
 	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{})
+	updater, err := selfupdate.NewUpdater(selfupdate.Config{EnterpriseBaseURL: enterpriseBaseURL()})
 	if err != nil {
 		return fmt.Errorf("failed to create updater: %v", err)
 	}

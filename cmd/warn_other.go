@@ -7,3 +7,5 @@ import "context"
 func startSecurityWarning(context.Context) func() {
 	return func() {}
 }
+
+func removeSecurityWarning() {}

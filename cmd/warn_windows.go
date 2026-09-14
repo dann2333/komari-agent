@@ -26,6 +26,9 @@ func startSecurityWarning(ctx context.Context) func() {
 	return func() {}
 }
 
+// Windows 的警告是一次性的通知，不会留下需要清理的内容。
+func removeSecurityWarning() {}
+
 func warnWindowsSessions(ctx context.Context, warning securityWarning) {
 	// Keep service notifications in logged-in users' sessions, never in Session 0.
 	// 启用权限

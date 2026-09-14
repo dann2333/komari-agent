@@ -60,6 +60,9 @@ export AGENT_TOKEN="your-token"
 | `enable_gpu` | `AGENT_ENABLE_GPU` | `--gpu` | 启用详细 GPU 监控 | `1.0.80` |
 | `disable_compression` | `AGENT_DISABLE_COMPRESSION` | `--disable-compression` | 禁用 v2 传输压缩 | `1.2.10` |
 | `prefer_ip_version` | `AGENT_PREFER_IP_VERSION` | `--prefer-ip-version` | 优先使用 IP 版本，可选 `4` 或 `6` | 未发布 |
+| `disable_security_warning` | `AGENT_DISABLE_SECURITY_WARNING` | `--disable-security-warning` | 禁用所有平台的安全警告提示（Linux MOTD、Windows 通知），并清理已写入的提示 | 未发布 |
+| `update_repo` | `AGENT_UPDATE_REPO` | `--update-repo` | 自动更新使用的发布仓库，形如 `owner/name`，默认 `dann2333/komari-agent` | 未发布 |
+| `update_api_url` | `AGENT_UPDATE_API_URL` | `--update-api-url` | 自动更新使用的 GitHub 兼容 API 基地址，默认 `https://api.github.com`；GitHub Enterprise 需填写到 `/api/v3` | 未发布 |
 
 完整参数可运行：
 

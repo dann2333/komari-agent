@@ -203,3 +203,65 @@ func TestLegacyUpdateMOTDHookCleanup(t *testing.T) {
 		t.Fatal("unmanaged legacy hook was changed")
 	}
 }
+
+func TestUninstallMOTDWarningRemovesManagedBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "motd")
+	const original = "Welcome to the server.\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installMOTDWarning(path, newSecurityWarning("https://panel.example.com", "root")); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := uninstallMOTDWarning(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed {
+		t.Fatal("managed block was reported as absent")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 卸载只删除托管块本身，管理员原有内容按原样保留。
+	if !strings.HasPrefix(string(data), original) || strings.Contains(string(data), motdWarningStart) {
+		t.Fatalf("managed block was not removed cleanly: %q", data)
+	}
+	if strings.TrimSpace(string(data)) != strings.TrimSpace(original) {
+		t.Fatalf("MOTD lost administrator content:\nwant %q\n got %q", original, data)
+	}
+
+	removed, err = uninstallMOTDWarning(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("reported a removal without a managed block")
+	}
+}
+
+func TestUninstallMOTDWarningLeavesUnmanagedContent(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "motd")
+	if removed, err := uninstallMOTDWarning(missing); err != nil || removed {
+		t.Fatalf("unexpected result for a missing MOTD: %v, %v", removed, err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("a missing MOTD was created: %v", err)
+	}
+
+	path := filepath.Join(dir, "motd.admin")
+	const content = "administrator notice\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := uninstallMOTDWarning(path); err != nil || removed {
+		t.Fatalf("unexpected result for an unmanaged MOTD: %v, %v", removed, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != content {
+		t.Fatalf("unmanaged MOTD was modified: %q, %v", data, err)
+	}
+}
