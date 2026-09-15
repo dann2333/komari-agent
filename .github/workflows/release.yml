@@ -3,13 +3,66 @@ name: Release Binaries
 on:
   release:
     types: [published]
+  # fork 里 push 事件触发不了工作流, 手动入口用来直接发正式版
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的正式版本号, 例如 1.5.1"
+        required: true
+        type: string
+      target:
+        description: "打标签的提交或分支"
+        required: false
+        default: main
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve release tag
+        id: resolve
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="$DISPATCH_TAG"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "No release tag resolved"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${VERSION}"
+
+      - name: Create release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists, reusing it."
+            exit 0
+          fi
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "${TARGET:-main}" \
+            --title "$VERSION" \
+            --generate-notes
+
   build-and-attach:
-    if: ${{ !github.event.release.prerelease }}
+    needs: prepare
     runs-on: ubuntu-latest
 
     strategy:
@@ -57,7 +110,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -78,5 +131,5 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          gh release upload ${{ github.event.release.tag_name }} $BINARY_NAME --repo ${{ github.repository }}
+          gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME --repo ${{ github.repository }}
         shell: bash
