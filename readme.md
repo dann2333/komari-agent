@@ -84,11 +84,17 @@ curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-t
 sudo sh switch-to-fork.sh --revert
 ```
 
-国内机器访问 raw.githubusercontent.com 不稳的话，脚本本身也可以走加速：
+国内机器访问 raw.githubusercontent.com 不稳的话，脚本本身也可以换个地址拉
+（脚本跑起来之后查版本和下载二进制会自己找能用的镜像，这里只是为了先把脚本弄下来）：
 
 ```bash
-curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh \
-  | sudo sh -s -- --yes
+# jsDelivr，通常比较稳
+curl -fsSL https://cdn.jsdelivr.net/gh/dann2333/komari-agent@main/switch-to-fork.sh | sudo sh -s -- --yes
+
+# 或者任选一个加速前缀，ghfast.top 挂了就换下一个
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
+curl -fsSL https://hub.gitmirror.com/https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
+curl -fsSL https://github.moeyy.xyz/https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
 ```
 
 > 注意用 `curl -fsSL` 下载，不要从网页上复制粘贴——
@@ -102,7 +108,23 @@ curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/dann2333/komari-
 取版本号有三条路，按顺序退让，所以 `api.github.com` 被墙也能装：
 GitHub API → `releases/latest` 的跳转地址 → `releases.atom`；
 三条都不通就直接走 `releases/latest/download/` 免版本号下载通道。
-`--ghproxy` 对这些元数据请求同样生效。
+
+每一步都是「直连 → 内置加速镜像」挨个试，查版本和下载二进制共用同一套镜像
+（`install.sh` 也是），内置了 11 个：
+
+```
+ghfast.top          gh-proxy.com        cdn.gh-proxy.com    edgeone.gh-proxy.com
+hk.gh-proxy.com     ghproxy.net         ghproxy.cc          hub.gitmirror.com
+github.moeyy.xyz    gh.llkk.cc          gh.ddlc.top
+```
+
+哪个先通就记住哪个，后面的请求直接从它开始，不用每次把挂掉的挨个等一遍。
+自己有更快的地址就用 `--mirror https://xxx` 插到最前面，或者用
+`KOMARI_MIRRORS` 整体替换（两个脚本都认）：
+
+```bash
+KOMARI_MIRRORS="https://my.mirror https://ghfast.top" sudo -E sh switch-to-fork.sh --yes
+```
 
 常用参数：
 
@@ -115,7 +137,9 @@ GitHub API → `releases/latest` 的跳转地址 → `releases.atom`；
 | `--service-name <name>` | 指定服务名，默认自动探测 |
 | `--add-flag <flag>` | 切换时追加参数，可重复，如 `--add-flag --disable-security-warning` |
 | `--remove-flag <flag>` | 切换时移除参数，可重复 |
-| `--ghproxy <prefix>` | GitHub 加速前缀 |
+| `--ghproxy <prefix>` | 只用这个加速前缀，不再试内置镜像 |
+| `--mirror <prefix>` | 往内置镜像列表最前面插一个，可重复 |
+| `--no-mirror` | 只直连，不用任何镜像 |
 | `-y, --yes` | 不交互 |
 | `--dry-run` | 只预览不改动 |
 | `--revert` | 回滚到切换前的版本 |

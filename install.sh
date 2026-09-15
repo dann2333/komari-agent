@@ -46,6 +46,32 @@ github_proxy=""
 install_version="" # New parameter for specifying version
 install_dir_specified=false
 install_no_mirror=false # 关闭自动加速镜像
+# 内置的 GitHub 加速镜像, 直连失败后按顺序尝试。
+# 这些站点时好时坏, 所以一次多放几个; 可以用 KOMARI_MIRRORS 整体替换。
+github_mirrors="${KOMARI_MIRRORS:-
+https://ghfast.top
+https://gh-proxy.com
+https://cdn.gh-proxy.com
+https://edgeone.gh-proxy.com
+https://hk.gh-proxy.com
+https://ghproxy.net
+https://ghproxy.cc
+https://hub.gitmirror.com
+https://github.moeyy.xyz
+https://gh.llkk.cc
+https://gh.ddlc.top
+}"
+
+# 把一个 GitHub 地址展开成"直连 + 各个镜像"的候选列表
+mirror_urls() {
+    _base="$1"
+    printf '%s\n' "$_base"
+    [ "$install_no_mirror" = "true" ] && return 0
+    for _m in $github_mirrors; do
+        printf '%s\n' "${_m%/}/${_base}"
+    done
+    return 0
+}
 service_user="${SUDO_USER:-$(id -un)}"
 user_service=false
 
@@ -365,7 +391,7 @@ resolve_snapshot_version() {
     if [ -n "$github_proxy" ]; then
         snapshot_api_urls="${github_proxy}/${snapshot_api_url} ${snapshot_api_url}"
     else
-        snapshot_api_urls="$snapshot_api_url"
+        snapshot_api_urls=$(mirror_urls "$snapshot_api_url")
     fi
 
     for api_url in $snapshot_api_urls; do
@@ -434,26 +460,40 @@ if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
     chown "$service_user" "$target_dir"
 fi
 
+# 镜像挂掉时经常回一个 HTML 错误页, 大小不为零但根本不是程序,
+# 所以看一眼文件头的魔数, 别把网页装到 agent 的位置上去。
+looks_like_binary() {
+    command -v od >/dev/null 2>&1 || return 0
+    _magic=$(head -c 4 "$1" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+    case "$_magic" in
+        7f454c46)                                     return 0 ;;  # ELF
+        cafebabe|cffaedfe|cefaedfe|feedface|feedfacf) return 0 ;;  # Mach-O
+        4d5a*)                                        return 0 ;;  # PE
+        *)                                            return 1 ;;
+    esac
+}
+
 # Download with automatic mirror fallback.
 # 直连失败自动依次尝试常见 GitHub 加速镜像, 可用 --install-no-mirror 关闭.
-if [ -n "$github_proxy" ] || [ "$install_no_mirror" = "true" ]; then
+if [ -n "$github_proxy" ]; then
+    # 显式指定了加速前缀就只用它 (download_url 里已经带上了)
     download_urls="$download_url"
 else
-    download_urls="
-${download_url}
-https://ghfast.top/${download_url}
-https://gh-proxy.com/${download_url}
-https://ghproxy.net/${download_url}
-"
+    download_urls=$(mirror_urls "$download_url")
 fi
 
 dl_ok=""
 for u in $download_urls; do
     log_step "Downloading $file_name ..."
     log_info "URL: ${CYAN}$u${NC}"
-    if curl -fL --connect-timeout 15 -o "$komari_agent_path" "$u" && [ -s "$komari_agent_path" ]; then
-        dl_ok=1
-        break
+    # --speed-time/--speed-limit: 连上了却几乎不传数据的镜像 20 秒就放弃
+    if curl -fL --connect-timeout 8 --speed-time 20 --speed-limit 2048 \
+            -o "$komari_agent_path" "$u" && [ -s "$komari_agent_path" ]; then
+        if looks_like_binary "$komari_agent_path"; then
+            dl_ok=1
+            break
+        fi
+        log_warning "Mirror returned a non-executable payload, trying the next one"
     fi
     rm -f "$komari_agent_path"
 done

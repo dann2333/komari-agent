@@ -28,8 +28,26 @@ TARGET_VERSION="${KOMARI_TARGET_VERSION:-auto}"
 # 服务名, 留空则自动探测 (默认会先找 komari-agent)
 SERVICE_NAME="${KOMARI_SERVICE_NAME:-}"
 
-# GitHub 加速前缀, 例如 https://ghfast.top, 留空表示直连
+# GitHub 加速前缀, 例如 https://ghfast.top。
+# 填了就只用它 (失败后仍然会试一次直连), 内置镜像列表不再参与。
 GITHUB_PROXY="${KOMARI_GITHUB_PROXY:-}"
+
+# 内置的 GitHub 加速镜像, 直连失败后按顺序尝试。
+# 这些站点时好时坏, 所以一次多放几个; 整体替换用 KOMARI_MIRRORS,
+# 临时插一个用 --mirror <前缀> (可重复, 插在最前面)。
+MIRRORS="${KOMARI_MIRRORS:-
+https://ghfast.top
+https://gh-proxy.com
+https://cdn.gh-proxy.com
+https://edgeone.gh-proxy.com
+https://hk.gh-proxy.com
+https://ghproxy.net
+https://ghproxy.cc
+https://hub.gitmirror.com
+https://github.moeyy.xyz
+https://gh.llkk.cc
+https://gh.ddlc.top
+}"
 
 # true = 直连失败后不再尝试内置的加速镜像
 NO_MIRROR="${KOMARI_NO_MIRROR:-false}"
@@ -77,7 +95,8 @@ komari-agent 切换脚本
   -s, --snapshot          等价于 --version snapshot
   -l, --latest, --stable  等价于 --version latest
   --service-name <name>   指定服务名, 默认自动探测
-  --ghproxy <prefix>      GitHub 加速前缀, 例如 https://ghfast.top
+  --ghproxy <prefix>      只用这个加速前缀, 例如 https://ghfast.top
+  --mirror <prefix>       往内置镜像列表最前面插一个, 可重复
   --no-mirror             直连失败时不再尝试内置镜像
   --add-flag <flag>       切换时追加的参数, 可重复
   --remove-flag <flag>    切换时移除的参数, 可重复
@@ -112,6 +131,8 @@ while [ $# -gt 0 ]; do
         -l|--latest|--stable) TARGET_VERSION=latest; shift ;;
         --service-name)  need_value "$1" "$2"; SERVICE_NAME="$2"; shift 2 ;;
         --ghproxy)       need_value "$1" "$2"; GITHUB_PROXY="$2"; shift 2 ;;
+        --mirror)        need_value "$1" "$2"; MIRRORS="$2
+$MIRRORS"; shift 2 ;;
         --no-mirror)     NO_MIRROR=true; shift ;;
         --add-flag)      need_value "$1" "$2"; ADD_FLAGS="$ADD_FLAGS $2"; shift 2 ;;
         --remove-flag)   need_value "$1" "$2"; REMOVE_FLAGS="$REMOVE_FLAGS $2"; shift 2 ;;
@@ -567,32 +588,47 @@ detect_platform() {
     return 0
 }
 
-# 候选地址: 自定义加速前缀 -> 直连 -> 内置镜像。
+# 上一次成功的镜像前缀。一台机器上能通的往往只有那么一两个,
+# 记下来后面几次请求直接从它开始, 不用每次都把死掉的挨个等一遍。
+MIRROR_HIT=""
+
+note_mirror_hit() {
+    case "$1" in
+        "$2") MIRROR_HIT="" ;;            # 直连成功, 不用记
+        *)    MIRROR_HIT="${1%/$2}" ;;
+    esac
+}
+
+# 候选地址: 上次成功的镜像 -> 自定义前缀 -> 直连 -> 内置镜像。
 # 元数据和二进制走同一套, 因为 api.github.com 在不少网络里是单独被墙的,
 # 只给下载配镜像的话就会出现"下载能通但查不到版本号"的死局。
 mirror_urls() {
     _base="$1"
+    [ -n "$MIRROR_HIT" ] && printf '%s\n' "${MIRROR_HIT}/${_base}"
     if [ -n "$GITHUB_PROXY" ]; then
-        printf '%s\n' "${GITHUB_PROXY%/}/${_base}"
+        [ "${GITHUB_PROXY%/}" = "$MIRROR_HIT" ] || printf '%s\n' "${GITHUB_PROXY%/}/${_base}"
         printf '%s\n' "$_base"
-    elif [ "$NO_MIRROR" = "true" ]; then
-        printf '%s\n' "$_base"
-    else
-        printf '%s\n' "$_base"
-        printf '%s\n' "https://ghfast.top/${_base}"
-        printf '%s\n' "https://gh-proxy.com/${_base}"
-        printf '%s\n' "https://ghproxy.net/${_base}"
+        return 0
     fi
+    printf '%s\n' "$_base"
+    [ "$NO_MIRROR" = "true" ] && return 0
+    for _m in $MIRRORS; do
+        _m="${_m%/}"
+        [ "$_m" = "$MIRROR_HIT" ] && continue
+        printf '%s\n' "${_m}/${_base}"
+    done
+    return 0
 }
 
 # 依次试每个候选地址, 取回第一份非空内容。
 # 出错信息自己给, 不让 curl 的原始报错糊到屏幕上。
 fetch_text() {
     for _u in $(mirror_urls "$1"); do
-        _body=$(curl -fsSL --connect-timeout 6 --max-time 20 \
+        _body=$(curl -fsSL --connect-timeout 5 --max-time 20 \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: komari-agent-switch" "$_u" 2>/dev/null) || continue
         [ -n "$_body" ] || continue
+        note_mirror_hit "$_u" "$1"
         printf '%s\n' "$_body"
         return 0
     done
@@ -606,11 +642,16 @@ json_tag_names() {
 # API 不通时的退路: /releases/latest 会 302 到 /releases/tag/<版本>,
 # 从最终地址里把版本号抠出来, 只要 github.com 或镜像能访问就行。
 resolve_latest_by_redirect() {
-    for _u in $(mirror_urls "https://github.com/${TARGET_REPO}/releases/latest"); do
+    _latest_url="https://github.com/${TARGET_REPO}/releases/latest"
+    for _u in $(mirror_urls "$_latest_url"); do
         _eff=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-            --connect-timeout 6 --max-time 20 "$_u" 2>/dev/null) || continue
+            --connect-timeout 5 --max-time 20 "$_u" 2>/dev/null) || continue
         case "$_eff" in
-            */releases/tag/*) printf '%s\n' "${_eff##*/releases/tag/}"; return 0 ;;
+            */releases/tag/*)
+                note_mirror_hit "$_u" "$_latest_url"
+                printf '%s\n' "${_eff##*/releases/tag/}"
+                return 0
+                ;;
         esac
     done
     return 1
@@ -716,8 +757,13 @@ download_agent() {
 
     for _u in $(mirror_urls "$_base"); do
         log_info "下载: ${CYAN}${_u}${NC}"
-        if curl -fL --progress-bar --connect-timeout 15 -o "$_out" "$_u" && [ -s "$_out" ]; then
+        # --speed-time/--speed-limit: 连上了却几乎不传数据的镜像 20 秒就放弃,
+        # 不然一个半死不活的站点能把整个脚本拖住
+        if curl -fL --progress-bar --connect-timeout 8 \
+                --speed-time 20 --speed-limit 2048 -o "$_out" "$_u" &&
+           [ -s "$_out" ]; then
             if looks_like_binary "$_out"; then
+                note_mirror_hit "$_u" "$_base"
                 chmod +x "$_out"
                 return 0
             fi
