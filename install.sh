@@ -244,57 +244,121 @@ uninstall_previous() {
 # Uninstall previous installation
 uninstall_previous
 
-install_dependencies() {
-    log_step "Checking and installing dependencies..."
+# --------------------------- HTTP 抓取 -------------------------------------
+# 不写死 curl: 老机器上的 curl 有可能根本没编 https, 一跑就是
+#   curl: (1) Protocol "https" not supported or disabled in libcurl
+# 所以先看本机有哪些工具真能跑 https, 第一个成功的就固定下来。
 
-    local deps="curl"
-    local missing_deps=""
-    for cmd in $deps; do
-        if ! command -v $cmd >/dev/null 2>&1; then
-            missing_deps="$missing_deps $cmd"
-        fi
-    done
+HTTP_TOOLS=""         # 本机可用的工具, 按优先级排
+HTTP_TOOL=""          # 已经成功过的那个, 之后直接用它
+WGET_PROGRESS_OPTS="" # GNU wget 用单行进度条, busybox 的没有这个选项
 
-    if [ -n "$missing_deps" ]; then
-        if [ "$EUID" -ne 0 ]; then
-            log_error "Missing required dependencies:$missing_deps"
-            log_info "Install them with your system package manager, then run this script again."
-            exit 1
-        fi
-        # Check package manager and install dependencies
-        if command -v apt >/dev/null 2>&1; then
-            log_info "Using apt to install dependencies..."
-            apt update
-            apt install -y $missing_deps
-        elif command -v yum >/dev/null 2>&1; then
-            log_info "Using yum to install dependencies..."
-            yum install -y $missing_deps
-        elif command -v apk >/dev/null 2>&1; then
-            log_info "Using apk to install dependencies..."
-            apk add $missing_deps
-        elif command -v opkg >/dev/null 2>&1; then # OpenWrt / iStoreOS
-            log_info "Using opkg to install dependencies (OpenWrt/iStoreOS)..."
-            opkg update
-            opkg install $missing_deps
-        elif command -v brew >/dev/null 2>&1; then
-            log_info "Using Homebrew to install dependencies..."
-            brew install $missing_deps
-        else
-            log_error "No supported package manager found (apt/yum/apk/opkg/brew)"
-            exit 1
-        fi
-        
-        # Verify installation
-        for cmd in $missing_deps; do
-            if ! command -v $cmd >/dev/null 2>&1; then
-                log_error "Failed to install $cmd"
-                exit 1
-            fi
-        done
-        log_success "Dependencies installed successfully"
-    else
-        log_success "Dependencies already satisfied"
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+curl_supports_https() {
+    # curl -V 里有一行 "Protocols: ... http https ...", 没有 https 就别指望它
+    curl -V 2>/dev/null | grep -i '^Protocols:' | grep -qw https
+}
+
+detect_http_tools() {
+    HTTP_TOOLS=""
+    if have_cmd curl && curl_supports_https; then
+        HTTP_TOOLS="curl"
     fi
+    if have_cmd wget; then
+        HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }wget"
+        if wget --help 2>&1 | grep -q -- '--show-progress'; then
+            WGET_PROGRESS_OPTS="-q --show-progress"
+        fi
+    fi
+    have_cmd python3 && HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }python3"
+    have_cmd python  && HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }python"
+    [ -n "$HTTP_TOOLS" ]
+}
+
+# wget 不传自定义 header: busybox 的 wget 不认 --header/--user-agent,
+# 而 GitHub 只要求有 User-Agent, 它自己会带上。
+http_text_curl() {
+    curl -fsSL --connect-timeout 5 --max-time 20 \
+        -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: komari-agent-installer" "$1" 2>/dev/null
+}
+http_text_wget()    { wget -q -T 20 -O - "$1" 2>/dev/null; }
+http_text_python3() { http_text_py python3 "$1"; }
+http_text_python()  { http_text_py python "$1"; }
+http_text_py() {
+    "$1" -c 'import sys
+try:
+    from urllib.request import Request, urlopen
+except ImportError:
+    from urllib2 import Request, urlopen
+req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-installer",
+                                    "Accept": "application/vnd.github+json"})
+sys.stdout.write(urlopen(req, timeout=20).read().decode("utf-8", "replace"))' "$2" 2>/dev/null
+}
+
+http_text() {
+    for _tool in ${HTTP_TOOL:-$HTTP_TOOLS}; do
+        _body=$("http_text_${_tool}" "$1") || continue
+        [ -n "$_body" ] || continue
+        HTTP_TOOL="$_tool"
+        printf '%s\n' "$_body"
+        return 0
+    done
+    return 1
+}
+
+# --speed-time/--speed-limit (wget 是 -T): 连上了却几乎不传数据的镜像早点放弃
+http_file_curl() {
+    curl -fL --connect-timeout 8 --speed-time 20 --speed-limit 2048 -o "$2" "$1"
+}
+http_file_wget()    { wget $WGET_PROGRESS_OPTS -T 20 -O "$2" "$1"; }
+http_file_python3() { http_file_py python3 "$1" "$2"; }
+http_file_python()  { http_file_py python "$1" "$2"; }
+http_file_py() {
+    "$1" -c 'import shutil, sys
+try:
+    from urllib.request import Request, urlopen
+except ImportError:
+    from urllib2 import Request, urlopen
+req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-installer"})
+resp = urlopen(req, timeout=30)
+with open(sys.argv[2], "wb") as out:
+    shutil.copyfileobj(resp, out)' "$2" "$3"
+}
+
+http_file() {
+    for _tool in ${HTTP_TOOL:-$HTTP_TOOLS}; do
+        if "http_file_${_tool}" "$1" "$2"; then
+            HTTP_TOOL="$_tool"
+            return 0
+        fi
+        rm -f "$2"
+    done
+    return 1
+}
+
+install_dependencies() {
+    log_step "Checking download tools..."
+
+    # curl / wget / python3 有一个能跑 https 就够了。
+    # 这里不替用户装包: 装什么、什么时候装是机器主人的事,
+    # 缺工具就把话说清楚, 让他自己决定。
+    if detect_http_tools; then
+        log_info "Download tools: ${GREEN}${HTTP_TOOLS}${NC}"
+        return 0
+    fi
+
+    log_error "No usable HTTPS download tool found (curl / wget / python3)"
+    if command -v curl >/dev/null 2>&1; then
+        log_info "curl exists but was built without HTTPS support:"
+        log_info "  curl -V | grep Protocols"
+    fi
+    log_info "Options:"
+    log_info "  1. install one of them yourself, e.g. apt install wget"
+    log_info "  2. or use komari-switch, a static loader binary that needs nothing else:"
+    log_info "     https://github.com/${github_repo}/releases/latest"
+    exit 1
 }
 
  
@@ -395,10 +459,7 @@ resolve_snapshot_version() {
     fi
 
     for api_url in $snapshot_api_urls; do
-        if ! releases_json=$(curl -fsSL --connect-timeout 15 \
-            -H "Accept: application/vnd.github+json" \
-            -H "User-Agent: komari-agent-installer" \
-            "$api_url"); then
+        if ! releases_json=$(http_text "$api_url"); then
             releases_json=""
         fi
 
@@ -486,9 +547,7 @@ dl_ok=""
 for u in $download_urls; do
     log_step "Downloading $file_name ..."
     log_info "URL: ${CYAN}$u${NC}"
-    # --speed-time/--speed-limit: 连上了却几乎不传数据的镜像 20 秒就放弃
-    if curl -fL --connect-timeout 8 --speed-time 20 --speed-limit 2048 \
-            -o "$komari_agent_path" "$u" && [ -s "$komari_agent_path" ]; then
+    if http_file "$u" "$komari_agent_path" && [ -s "$komari_agent_path" ]; then
         if looks_like_binary "$komari_agent_path"; then
             dl_ok=1
             break

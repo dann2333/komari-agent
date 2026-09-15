@@ -121,6 +121,18 @@ jobs:
           fi
             go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
+
+      - name: Build switcher
+        if: ${{ matrix.goos != 'windows' }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }} ./switcher
+
       - name: Upload binary to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,5 +143,7 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME --repo ${{ github.repository }}
+          SWITCH_NAME=komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}
+          [ -f "$SWITCH_NAME" ] || SWITCH_NAME=""
+          gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME $SWITCH_NAME --repo ${{ github.repository }}
         shell: bash

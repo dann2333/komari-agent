@@ -61,6 +61,9 @@ ADD_FLAGS="${KOMARI_ADD_FLAGS:-}"
 # 切换时自动移除的参数 (空格分隔), 例: "--disable-web-ssh"
 REMOVE_FLAGS="${KOMARI_REMOVE_FLAGS:-}"
 
+# 直接用本地已经下好的二进制, 填了就完全不碰网络
+LOCAL_FILE="${KOMARI_LOCAL_FILE:-}"
+
 # true = 保留备份目录, 方便之后 --revert
 KEEP_BACKUP="${KOMARI_KEEP_BACKUP:-true}"
 # ==========================================================================
@@ -98,6 +101,7 @@ komari-agent 切换脚本
   --ghproxy <prefix>      只用这个加速前缀, 例如 https://ghfast.top
   --mirror <prefix>       往内置镜像列表最前面插一个, 可重复
   --no-mirror             直连失败时不再尝试内置镜像
+  --local-file <path>     用本地已经下好的二进制, 不联网下载
   --add-flag <flag>       切换时追加的参数, 可重复
   --remove-flag <flag>    切换时移除的参数, 可重复
   -y, --yes               不交互, 直接按配置执行
@@ -134,6 +138,7 @@ while [ $# -gt 0 ]; do
         --mirror)        need_value "$1" "$2"; MIRRORS="$2
 $MIRRORS"; shift 2 ;;
         --no-mirror)     NO_MIRROR=true; shift ;;
+        --local-file)    need_value "$1" "$2"; LOCAL_FILE="$2"; shift 2 ;;
         --add-flag)      need_value "$1" "$2"; ADD_FLAGS="$ADD_FLAGS $2"; shift 2 ;;
         --remove-flag)   need_value "$1" "$2"; REMOVE_FLAGS="$REMOVE_FLAGS $2"; shift 2 ;;
         -y|--yes)        INTERACTIVE=no; shift ;;
@@ -588,6 +593,145 @@ detect_platform() {
     return 0
 }
 
+# --------------------------- HTTP 抓取 -------------------------------------
+# 不写死 curl: 老机器上的 curl 有可能根本没编 https, 一跑就是
+#   curl: (1) Protocol "https" not supported or disabled in libcurl
+# 所以这里先看本机有哪些工具真能跑 https, 第一个成功的就固定下来。
+
+HTTP_TOOLS=""        # 本机可用的工具, 按优先级排
+HTTP_TOOL=""         # 已经成功过的那个, 之后直接用它
+WGET_PROGRESS_OPTS="" # GNU wget 用单行进度条, busybox 的没有这个选项
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+curl_supports_https() {
+    # curl -V 里有一行 "Protocols: ... http https ...", 没有 https 就别指望它
+    curl -V 2>/dev/null | grep -i '^Protocols:' | grep -qw https
+}
+
+detect_http_tools() {
+    HTTP_TOOLS=""
+    if have_cmd curl && curl_supports_https; then
+        HTTP_TOOLS="curl"
+    fi
+    if have_cmd wget; then
+        HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }wget"
+        # 默认的点阵进度一屏都是点, 有 --show-progress 就换成单行进度条
+        if wget --help 2>&1 | grep -q -- '--show-progress'; then
+            WGET_PROGRESS_OPTS="-q --show-progress"
+        fi
+    fi
+    have_cmd python3 && HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }python3"
+    have_cmd python  && HTTP_TOOLS="${HTTP_TOOLS:+$HTTP_TOOLS }python"
+    # 一个都没挑出来: 有 curl 就还是用 curl, 至少能让它自己把错误说清楚
+    if [ -z "$HTTP_TOOLS" ] && have_cmd curl; then
+        HTTP_TOOLS="curl"
+    fi
+    [ -n "$HTTP_TOOLS" ]
+}
+
+# --- 取文本 -----------------------------------------------------------------
+# wget 不传自定义 header: busybox 的 wget 不认 --header/--user-agent,
+# 而 GitHub 只要求有 User-Agent, 它自己会带上。
+http_text_curl() {
+    curl -fsSL --connect-timeout 5 --max-time 20 \
+        -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: komari-agent-switch" "$1" 2>/dev/null
+}
+http_text_wget()    { wget -q -T 20 -O - "$1" 2>/dev/null; }
+http_text_python3() { http_text_py python3 "$1"; }
+http_text_python()  { http_text_py python "$1"; }
+http_text_py() {
+    "$1" -c 'import sys
+try:
+    from urllib.request import Request, urlopen
+except ImportError:
+    from urllib2 import Request, urlopen
+req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-switch",
+                                    "Accept": "application/vnd.github+json"})
+data = urlopen(req, timeout=20).read()
+sys.stdout.write(data.decode("utf-8", "replace"))' "$2" 2>/dev/null
+}
+
+http_text() {
+    for _tool in ${HTTP_TOOL:-$HTTP_TOOLS}; do
+        _body=$("http_text_${_tool}" "$1") || continue
+        [ -n "$_body" ] || continue
+        HTTP_TOOL="$_tool"
+        printf '%s\n' "$_body"
+        return 0
+    done
+    return 1
+}
+
+# --- 下载到文件 -------------------------------------------------------------
+# --speed-time/--speed-limit (wget 是 -T): 连上了却几乎不传数据的镜像早点放弃,
+# 不然一个半死不活的站点能把整个脚本拖住。
+http_file_curl() {
+    curl -fL --progress-bar --connect-timeout 8 \
+        --speed-time 20 --speed-limit 2048 -o "$2" "$1"
+}
+http_file_wget()    { wget $WGET_PROGRESS_OPTS -T 20 -O "$2" "$1"; }
+http_file_python3() { http_file_py python3 "$1" "$2"; }
+http_file_python()  { http_file_py python "$1" "$2"; }
+http_file_py() {
+    "$1" -c 'import shutil, sys
+try:
+    from urllib.request import Request, urlopen
+except ImportError:
+    from urllib2 import Request, urlopen
+req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-switch"})
+resp = urlopen(req, timeout=30)
+with open(sys.argv[2], "wb") as out:
+    shutil.copyfileobj(resp, out)' "$2" "$3"
+}
+
+http_file() {
+    for _tool in ${HTTP_TOOL:-$HTTP_TOOLS}; do
+        if "http_file_${_tool}" "$1" "$2"; then
+            HTTP_TOOL="$_tool"
+            return 0
+        fi
+        rm -f "$2"
+    done
+    return 1
+}
+
+# --- 跟完跳转后的最终地址 ---------------------------------------------------
+# 只有这一项不是每个工具都做得到 (busybox 的 wget 就没有 -S/--spider),
+# 拿不到就当这条路不通, 上层还有 atom 和 latest 直下通道兜着。
+http_final_curl() {
+    curl -fsSL -o /dev/null -w '%{url_effective}' \
+        --connect-timeout 5 --max-time 20 "$1" 2>/dev/null
+}
+http_final_wget() {
+    wget -S --spider --max-redirect=0 -T 20 "$1" 2>&1 |
+        sed -n 's/^[[:space:]]*[Ll]ocation:[[:space:]]*//p' |
+        head -n 1
+}
+http_final_python3() { http_final_py python3 "$1"; }
+http_final_python()  { http_final_py python "$1"; }
+http_final_py() {
+    "$1" -c 'import sys
+try:
+    from urllib.request import Request, urlopen
+except ImportError:
+    from urllib2 import Request, urlopen
+req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-switch"})
+sys.stdout.write(urlopen(req, timeout=20).geturl())' "$2" 2>/dev/null
+}
+
+http_final_url() {
+    for _tool in ${HTTP_TOOL:-$HTTP_TOOLS}; do
+        _eff=$("http_final_${_tool}" "$1" 2>/dev/null) || continue
+        [ -n "$_eff" ] || continue
+        HTTP_TOOL="$_tool"
+        printf '%s\n' "$_eff"
+        return 0
+    done
+    return 1
+}
+
 # 上一次成功的镜像前缀。一台机器上能通的往往只有那么一两个,
 # 记下来后面几次请求直接从它开始, 不用每次都把死掉的挨个等一遍。
 MIRROR_HIT=""
@@ -621,12 +765,10 @@ mirror_urls() {
 }
 
 # 依次试每个候选地址, 取回第一份非空内容。
-# 出错信息自己给, 不让 curl 的原始报错糊到屏幕上。
+# 出错信息自己给, 不让下载工具的原始报错糊到屏幕上。
 fetch_text() {
     for _u in $(mirror_urls "$1"); do
-        _body=$(curl -fsSL --connect-timeout 5 --max-time 20 \
-            -H "Accept: application/vnd.github+json" \
-            -H "User-Agent: komari-agent-switch" "$_u" 2>/dev/null) || continue
+        _body=$(http_text "$_u") || continue
         [ -n "$_body" ] || continue
         note_mirror_hit "$_u" "$1"
         printf '%s\n' "$_body"
@@ -644,8 +786,7 @@ json_tag_names() {
 resolve_latest_by_redirect() {
     _latest_url="https://github.com/${TARGET_REPO}/releases/latest"
     for _u in $(mirror_urls "$_latest_url"); do
-        _eff=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-            --connect-timeout 5 --max-time 20 "$_u" 2>/dev/null) || continue
+        _eff=$(http_final_url "$_u") || continue
         case "$_eff" in
             */releases/tag/*)
                 note_mirror_hit "$_u" "$_latest_url"
@@ -695,6 +836,10 @@ no_release_hint() {
 }
 
 resolve_version() {
+    if [ -n "$LOCAL_FILE" ]; then
+        resolved_version="本地文件"
+        return 0
+    fi
     case "$TARGET_VERSION" in
         latest)
             resolved_version=$(resolve_latest_release) || resolved_version=""
@@ -749,6 +894,15 @@ looks_like_binary() {
 
 download_agent() {
     _out="$1"
+    if [ -n "$LOCAL_FILE" ]; then
+        cp "$LOCAL_FILE" "$_out" || return 1
+        chmod +x "$_out"
+        if ! looks_like_binary "$_out"; then
+            log_error "${LOCAL_FILE} 看着不像个可执行文件"
+            return 1
+        fi
+        return 0
+    fi
     if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
         _base="https://github.com/${TARGET_REPO}/releases/latest/download/${file_name}"
     else
@@ -757,11 +911,7 @@ download_agent() {
 
     for _u in $(mirror_urls "$_base"); do
         log_info "下载: ${CYAN}${_u}${NC}"
-        # --speed-time/--speed-limit: 连上了却几乎不传数据的镜像 20 秒就放弃,
-        # 不然一个半死不活的站点能把整个脚本拖住
-        if curl -fL --progress-bar --connect-timeout 8 \
-                --speed-time 20 --speed-limit 2048 -o "$_out" "$_u" &&
-           [ -s "$_out" ]; then
+        if http_file "$_u" "$_out" && [ -s "$_out" ]; then
             if looks_like_binary "$_out"; then
                 note_mirror_hit "$_u" "$_base"
                 chmod +x "$_out"
@@ -901,8 +1051,6 @@ printf '%b\n' "${WHITE}      Komari Agent 版本切换脚本            ${NC}"
 printf '%b\n' "${WHITE}===========================================${NC}"
 echo ""
 
-command -v curl >/dev/null 2>&1 || { log_error "需要 curl, 请先安装"; exit 1; }
-
 log_step "查找已安装的 agent 服务..."
 discover_service || {
     log_error "没有找到已安装的 komari agent 服务"
@@ -982,9 +1130,31 @@ log_step "确认目标平台..."
 detect_platform || exit 1
 log_info "平台: ${GREEN}${os_name}/${arch}${NC} -> ${GREEN}${file_name}${NC}"
 
+if [ -n "$LOCAL_FILE" ]; then
+    [ -f "$LOCAL_FILE" ] || {
+        log_error "找不到 --local-file 指定的文件: ${LOCAL_FILE}"
+        exit 1
+    }
+else
+    detect_http_tools || {
+        log_error "本机没有可用的下载工具 (curl / wget / python3)"
+        if command -v curl >/dev/null 2>&1; then
+            log_info "curl 在, 但它没编 https: curl -V | grep Protocols"
+        fi
+        log_info "这种环境建议改用 komari-switch —— 同样的事, 但它是个静态小程序,"
+        log_info "自己做 HTTPS 下载, 什么都不依赖:"
+        log_info "  https://github.com/${TARGET_REPO}/releases/latest"
+        log_info "或者自己把二进制下好之后用 --local-file <路径> 指定"
+        exit 1
+    }
+    log_info "下载工具: ${GREEN}${HTTP_TOOLS}${NC}"
+fi
+
 log_step "解析目标版本..."
 resolve_version || exit 1
-if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
+if [ -n "$LOCAL_FILE" ]; then
+    version_label="本地文件 ${LOCAL_FILE}"
+elif [ "$USE_LATEST_CHANNEL" = "yes" ]; then
     version_label="latest (仓库最新正式版)"
 else
     version_label="$resolved_version"
@@ -996,7 +1166,11 @@ if [ "$DRY_RUN" = true ]; then
     log_warning "dry-run 模式, 下面这些操作都不会真的执行:"
     log_info "  1. 停止服务 ${SERVICE_NAME}"
     log_info "  2. 备份 ${AGENT_PATH} 和 ${SERVICE_FILE}"
-    log_info "  3. 下载 ${TARGET_REPO} 的 ${version_label} ${file_name} 覆盖二进制"
+    if [ -n "$LOCAL_FILE" ]; then
+        log_info "  3. 用 ${LOCAL_FILE} 覆盖二进制"
+    else
+        log_info "  3. 下载 ${TARGET_REPO} 的 ${version_label} ${file_name} 覆盖二进制"
+    fi
     if [ "$NEW_ARGS" != "$CURRENT_ARGS" ]; then
         log_info "  4. 把启动参数改成: $(mask_args "$NEW_ARGS")"
     else
@@ -1014,12 +1188,19 @@ if [ "$INTERACTIVE" = "yes" ]; then
 fi
 
 tmp_binary="${TMPDIR:-/tmp}/komari-agent-switch-$$"
-log_step "下载新版本..."
+if [ -n "$LOCAL_FILE" ]; then
+    log_step "使用本地文件 ${LOCAL_FILE}..."
+else
+    log_step "下载新版本..."
+fi
 download_agent "$tmp_binary" || {
-    log_error "下载失败, 直连和镜像都没成功"
-    log_info "可以用 --ghproxy <前缀> 指定加速地址后重试"
-    if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
-        log_info "也确认下 ${TARGET_REPO} 是否真的发过 ${file_name} 这个产物"
+    if [ -z "$LOCAL_FILE" ]; then
+        log_error "下载失败, 直连和镜像都没成功"
+        log_info "可以用 --ghproxy <前缀> 指定加速地址后重试"
+        log_info "也可以自己把 ${file_name} 下好, 再用 --local-file <路径> 指定"
+        if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
+            log_info "或者确认下 ${TARGET_REPO} 是否真的发过 ${file_name} 这个产物"
+        fi
     fi
     rm -f "$tmp_binary"
     exit 1
@@ -1094,7 +1275,7 @@ fi
 echo ""
 printf '%b\n' "${WHITE}===========================================${NC}"
 log_success "切换完成"
-log_config "仓库:     ${GREEN}${TARGET_REPO}${NC}"
+[ -z "$LOCAL_FILE" ] && log_config "仓库:     ${GREEN}${TARGET_REPO}${NC}"
 log_config "版本:     ${GREEN}${version_label}${NC}"
 log_config "参数:     ${GREEN}$(mask_args "$NEW_ARGS")${NC}"
 if [ "$KEEP_BACKUP" = "true" ]; then

@@ -67,6 +67,44 @@ export AGENT_TOKEN="your-token"
 
 ## 从官方版切换过来
 
+两个工具做的是同一件事：找到已装好的 agent 服务，换掉二进制，保留（或顺手改掉）
+原有的 endpoint、token 和其它参数，起不来就自动回滚。
+
+| | 适用场景 |
+| --- | --- |
+| `komari-switch`（静态小程序） | 推荐。不依赖 curl/wget/python，不受 sh/dash/busybox 差异影响 |
+| `switch-to-fork.sh`（shell 脚本） | 不想先下一个二进制的时候用，机器上有能跑 https 的 curl/wget/python3 就行 |
+
+### komari-switch
+
+有些机器上的 curl 是没编 https 的（`curl: (1) Protocol "https" not supported or disabled in libcurl`），
+这种环境里脚本寸步难行。`komari-switch` 是个 6MB 出头的单文件程序，自己做 HTTPS 下载，
+什么都不依赖。每个 release 里都有，按平台挑一个：
+
+```bash
+curl -fsSL -o komari-switch \
+  https://github.com/dann2333/komari-agent/releases/latest/download/komari-switch-linux-amd64
+chmod +x komari-switch
+sudo ./komari-switch              # 交互式：列出当前参数，可以逐项改完再切
+sudo ./komari-switch -y           # 一键：不问，直接换成最新正式版
+sudo ./komari-switch --dry-run    # 只看它打算做什么
+sudo ./komari-switch --revert     # 换回切换前的版本
+```
+
+目标机器连下载工具都没有也不要紧——在别的机器上下好 `komari-switch` 和 agent 二进制，
+`scp` 过去，然后全程不联网地切换：
+
+```bash
+sudo ./komari-switch --local-file ./komari-agent-linux-amd64
+```
+
+参数和脚本基本一致（`--repo` / `--version` / `--add-flag` / `--remove-flag` /
+`--ghproxy` / `--mirror` / `--service-name` …），`--help` 有完整列表。
+源码在 `switcher/`，纯标准库，静态编译。
+
+### switch-to-fork.sh
+
+
 已经装了官方版 agent 的话，用 `switch-to-fork.sh` 可以直接换成本仓库的版本，
 原有的 endpoint、token 和其它参数都会保留：
 

@@ -62,8 +62,21 @@ jobs:
           fi
           go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
+      - name: Build switcher
+        if: ${{ matrix.goos != 'windows' }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          VERSION: ${{ github.sha }}
+        run: |
+          go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }} ./switcher
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}*
+          path: |
+            komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}*
+            komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}*
