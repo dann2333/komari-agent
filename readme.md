@@ -61,9 +61,9 @@ export AGENT_TOKEN="your-token"
 | `disable_compression` | `AGENT_DISABLE_COMPRESSION` | `--disable-compression` | 禁用 v2 传输压缩 | `1.2.10` |
 | `prefer_ip_version` | `AGENT_PREFER_IP_VERSION` | `--prefer-ip-version` | 优先使用 IP 版本，可选 `4` 或 `6` | 未发布 |
 | `reconnect_interval` | `AGENT_RECONNECT_INTERVAL` | `--reconnect-interval`, `-c` | 重连退避上限，单位秒。断线会立刻重连一次，失败后从 1 秒起逐次翻倍，最多等这么久 | `0.0.9` |
-| `disable_security_warning` | `AGENT_DISABLE_SECURITY_WARNING` | `--disable-security-warning` | 禁用所有平台的安全警告提示（Linux MOTD、Windows 通知），并清理已写入的提示 | 未发布 |
-| `update_repo` | `AGENT_UPDATE_REPO` | `--update-repo` | 自动更新使用的发布仓库，形如 `owner/name`，默认 `dann2333/komari-agent` | 未发布 |
-| `update_api_url` | `AGENT_UPDATE_API_URL` | `--update-api-url` | 自动更新使用的 GitHub 兼容 API 基地址，默认 `https://api.github.com`；GitHub Enterprise 需填写到 `/api/v3` | 未发布 |
+| `disable_security_warning` | `AGENT_DISABLE_SECURITY_WARNING` | `--disable-security-warning` | 禁用所有平台的安全警告提示（Linux MOTD、Windows 通知），并清理已写入的提示 | `1.5.1` |
+| `update_repo` | `AGENT_UPDATE_REPO` | `--update-repo` | 自动更新使用的发布仓库，形如 `owner/name`，默认 `dann2333/komari-agent` | `1.5.1` |
+| `update_api_url` | `AGENT_UPDATE_API_URL` | `--update-api-url` | 自动更新使用的 GitHub 兼容 API 基地址，默认 `https://api.github.com`；GitHub Enterprise 需填写到 `/api/v3` | `1.5.1` |
 
 ## 从官方版切换过来
 
@@ -71,23 +71,38 @@ export AGENT_TOKEN="your-token"
 原有的 endpoint、token 和其它参数都会保留：
 
 ```bash
+# 一键切换：不问任何问题，直接换成最新正式版
+curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
+
 # 交互式：会列出当前参数，可以逐项改完再切
 curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh
 
-# 不交互，直接按默认配置切换
-curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
-
 # 先看看它打算做什么，不改动任何东西
-sudo sh switch-to-fork.sh --dry-run
+curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --dry-run
 
 # 换回切换前的版本
 sudo sh switch-to-fork.sh --revert
 ```
 
+国内机器访问 raw.githubusercontent.com 不稳的话，脚本本身也可以走加速：
+
+```bash
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh \
+  | sudo sh -s -- --yes
+```
+
+> 注意用 `curl -fsSL` 下载，不要从网页上复制粘贴——
+> 粘进来的内容很容易混进页面上的其它文字，脚本第一行就会报 `command not found`。
+
 脚本会自动找到已安装的服务（systemd / systemd user / OpenRC / procd / upstart / launchd），
 读出当前启动参数，下载对应平台的二进制，替换后重启服务。
 切换前会把原二进制和服务文件备份到 `<安装目录>/.komari-switch-backup`，
 新版本起不来会自动回滚。
+
+取版本号有三条路，按顺序退让，所以 `api.github.com` 被墙也能装：
+GitHub API → `releases/latest` 的跳转地址 → `releases.atom`；
+三条都不通就直接走 `releases/latest/download/` 免版本号下载通道。
+`--ghproxy` 对这些元数据请求同样生效。
 
 常用参数：
 
@@ -95,6 +110,8 @@ sudo sh switch-to-fork.sh --revert
 | --- | --- |
 | `--repo <owner/name>` | 目标仓库，默认 `dann2333/komari-agent` |
 | `--version <ver>` | `auto`（默认，优先正式版）/ `latest` / `snapshot` / 具体 tag |
+| `-s, --snapshot` | 等价于 `--version snapshot` |
+| `-l, --latest` | 等价于 `--version latest` |
 | `--service-name <name>` | 指定服务名，默认自动探测 |
 | `--add-flag <flag>` | 切换时追加参数，可重复，如 `--add-flag --disable-security-warning` |
 | `--remove-flag <flag>` | 切换时移除参数，可重复 |

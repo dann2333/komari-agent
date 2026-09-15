@@ -61,9 +61,12 @@ log_error()   { printf '%b\n' "${RED}[ERROR]${NC} $1"; }
 log_step()    { printf '%b\n' "${CYAN}==>${NC} $1"; }
 log_config()  { printf '%b\n' "${CYAN}[CONFIG]${NC} $1"; }
 
-EUID=${EUID:-$(id -u)}
+# 注意别叫 EUID: bash 里那是只读变量, 赋值会报错
+CURRENT_UID=$(id -u)
 DRY_RUN=false
 REVERT=false
+# 查不到版本号时改走 releases/latest 直下通道
+USE_LATEST_CHANNEL=no
 
 usage() {
     cat <<'USAGE'
@@ -71,8 +74,10 @@ komari-agent 切换脚本
 
   --repo <owner/name>     目标仓库 (默认 dann2333/komari-agent)
   --version <ver>         auto | latest | snapshot | 具体 tag
+  -s, --snapshot          等价于 --version snapshot
+  -l, --latest, --stable  等价于 --version latest
   --service-name <name>   指定服务名, 默认自动探测
-  --ghproxy <prefix>      GitHub 加速前缀
+  --ghproxy <prefix>      GitHub 加速前缀, 例如 https://ghfast.top
   --no-mirror             直连失败时不再尝试内置镜像
   --add-flag <flag>       切换时追加的参数, 可重复
   --remove-flag <flag>    切换时移除的参数, 可重复
@@ -81,18 +86,35 @@ komari-agent 切换脚本
   --dry-run               只显示将要做什么, 不改动任何东西
   --revert                回滚到切换前的二进制和服务配置
   -h, --help              显示本帮助
+
+长选项也可以写成 --repo=owner/name 这种带等号的形式。
 USAGE
 }
 
+need_value() {
+    [ -n "$2" ] || { log_error "$1 后面缺少取值"; exit 1; }
+}
+
 while [ $# -gt 0 ]; do
+    # --opt=value 拆成 --opt value, 两种写法都收
     case "$1" in
-        --repo)          TARGET_REPO="$2"; shift 2 ;;
-        --version)       TARGET_VERSION="$2"; shift 2 ;;
-        --service-name)  SERVICE_NAME="$2"; shift 2 ;;
-        --ghproxy)       GITHUB_PROXY="$2"; shift 2 ;;
+        --*=*)
+            _opt="${1%%=*}"
+            _val="${1#*=}"
+            shift
+            set -- "$_opt" "$_val" "$@"
+            ;;
+    esac
+    case "$1" in
+        --repo)          need_value "$1" "$2"; TARGET_REPO="$2"; shift 2 ;;
+        --version)       need_value "$1" "$2"; TARGET_VERSION="$2"; shift 2 ;;
+        -s|--snapshot)   TARGET_VERSION=snapshot; shift ;;
+        -l|--latest|--stable) TARGET_VERSION=latest; shift ;;
+        --service-name)  need_value "$1" "$2"; SERVICE_NAME="$2"; shift 2 ;;
+        --ghproxy)       need_value "$1" "$2"; GITHUB_PROXY="$2"; shift 2 ;;
         --no-mirror)     NO_MIRROR=true; shift ;;
-        --add-flag)      ADD_FLAGS="$ADD_FLAGS $2"; shift 2 ;;
-        --remove-flag)   REMOVE_FLAGS="$REMOVE_FLAGS $2"; shift 2 ;;
+        --add-flag)      need_value "$1" "$2"; ADD_FLAGS="$ADD_FLAGS $2"; shift 2 ;;
+        --remove-flag)   need_value "$1" "$2"; REMOVE_FLAGS="$REMOVE_FLAGS $2"; shift 2 ;;
         -y|--yes)        INTERACTIVE=no; shift ;;
         -i|--interactive) INTERACTIVE=yes; shift ;;
         --dry-run)       DRY_RUN=true; shift ;;
@@ -545,52 +567,113 @@ detect_platform() {
     return 0
 }
 
-github_api() {
-    # 出错信息自己给, 不让 curl 的原始报错糊到屏幕上
-    curl -fsSL --connect-timeout 15 \
-        -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: komari-agent-switch" "$1" 2>/dev/null
+# 候选地址: 自定义加速前缀 -> 直连 -> 内置镜像。
+# 元数据和二进制走同一套, 因为 api.github.com 在不少网络里是单独被墙的,
+# 只给下载配镜像的话就会出现"下载能通但查不到版本号"的死局。
+mirror_urls() {
+    _base="$1"
+    if [ -n "$GITHUB_PROXY" ]; then
+        printf '%s\n' "${GITHUB_PROXY%/}/${_base}"
+        printf '%s\n' "$_base"
+    elif [ "$NO_MIRROR" = "true" ]; then
+        printf '%s\n' "$_base"
+    else
+        printf '%s\n' "$_base"
+        printf '%s\n' "https://ghfast.top/${_base}"
+        printf '%s\n' "https://gh-proxy.com/${_base}"
+        printf '%s\n' "https://ghproxy.net/${_base}"
+    fi
 }
 
-resolve_latest_release() {
-    _json=$(github_api "https://api.github.com/repos/${TARGET_REPO}/releases/latest") || return 1
-    printf '%s\n' "$_json" |
-        grep -o '"tag_name":[[:space:]]*"[^"]*"' |
-        sed 's/.*"\([^"]*\)"$/\1/' |
-        head -n 1
+# 依次试每个候选地址, 取回第一份非空内容。
+# 出错信息自己给, 不让 curl 的原始报错糊到屏幕上。
+fetch_text() {
+    for _u in $(mirror_urls "$1"); do
+        _body=$(curl -fsSL --connect-timeout 6 --max-time 20 \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: komari-agent-switch" "$_u" 2>/dev/null) || continue
+        [ -n "$_body" ] || continue
+        printf '%s\n' "$_body"
+        return 0
+    done
+    return 1
 }
 
-resolve_snapshot_release() {
-    _json=$(github_api "https://api.github.com/repos/${TARGET_REPO}/releases?per_page=100") || return 1
-    printf '%s\n' "$_json" |
-        grep -o '"tag_name":[[:space:]]*"Snapshot-[^"]*"' |
-        sed 's/.*"\(Snapshot-[^"]*\)".*/\1/' |
+json_tag_names() {
+    grep -o '"tag_name":[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+# API 不通时的退路: /releases/latest 会 302 到 /releases/tag/<版本>,
+# 从最终地址里把版本号抠出来, 只要 github.com 或镜像能访问就行。
+resolve_latest_by_redirect() {
+    for _u in $(mirror_urls "https://github.com/${TARGET_REPO}/releases/latest"); do
+        _eff=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            --connect-timeout 6 --max-time 20 "$_u" 2>/dev/null) || continue
+        case "$_eff" in
+            */releases/tag/*) printf '%s\n' "${_eff##*/releases/tag/}"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# 快照是预发布, /releases/latest 看不到, 用 releases.atom 兜底
+resolve_snapshot_by_atom() {
+    _feed=$(fetch_text "https://github.com/${TARGET_REPO}/releases.atom") || return 1
+    printf '%s\n' "$_feed" |
+        grep -o 'releases/tag/Snapshot-[^"<]*' |
+        sed 's|.*releases/tag/||' |
         LC_ALL=C sort -r |
         head -n 1
 }
 
+resolve_latest_release() {
+    _tag=""
+    if _json=$(fetch_text "https://api.github.com/repos/${TARGET_REPO}/releases/latest"); then
+        _tag=$(printf '%s\n' "$_json" | json_tag_names | head -n 1)
+    fi
+    [ -n "$_tag" ] || _tag=$(resolve_latest_by_redirect)
+    [ -n "$_tag" ] || return 1
+    printf '%s\n' "$_tag"
+}
+
+resolve_snapshot_release() {
+    _tag=""
+    if _json=$(fetch_text "https://api.github.com/repos/${TARGET_REPO}/releases?per_page=100"); then
+        _tag=$(printf '%s\n' "$_json" | json_tag_names |
+            grep '^Snapshot-' | LC_ALL=C sort -r | head -n 1)
+    fi
+    [ -n "$_tag" ] || _tag=$(resolve_snapshot_by_atom)
+    [ -n "$_tag" ] || return 1
+    printf '%s\n' "$_tag"
+}
+
 no_release_hint() {
     log_error "取不到 ${TARGET_REPO} 的 $1"
-    log_info "确认一下仓库名是否写对, 以及本机能否访问 GitHub API"
+    log_info "确认一下仓库名是否写对, 以及本机能否访问 GitHub"
     log_info "网络受限的话可以用 --ghproxy <前缀> 指定加速地址"
 }
 
 resolve_version() {
     case "$TARGET_VERSION" in
         latest)
-            resolved_version=$(resolve_latest_release)
-            [ -n "$resolved_version" ] || { no_release_hint "正式版 release"; return 1; }
+            resolved_version=$(resolve_latest_release) || resolved_version=""
+            if [ -z "$resolved_version" ]; then
+                fall_back_to_latest_channel || return 1
+            fi
             ;;
         snapshot)
-            resolved_version=$(resolve_snapshot_release)
+            resolved_version=$(resolve_snapshot_release) || resolved_version=""
+            # 快照没有 /releases/latest 这种免版本号通道, 只能如实报错
             [ -n "$resolved_version" ] || { no_release_hint "快照版 release"; return 1; }
             ;;
         auto)
-            resolved_version=$(resolve_latest_release)
+            resolved_version=$(resolve_latest_release) || resolved_version=""
             if [ -z "$resolved_version" ]; then
                 log_warning "没有拿到 ${TARGET_REPO} 的正式版, 改找最新快照"
-                resolved_version=$(resolve_snapshot_release)
-                [ -n "$resolved_version" ] || { no_release_hint "任何 release"; return 1; }
+                resolved_version=$(resolve_snapshot_release) || resolved_version=""
+            fi
+            if [ -z "$resolved_version" ]; then
+                fall_back_to_latest_channel || return 1
             fi
             ;;
         *)
@@ -600,28 +683,45 @@ resolve_version() {
     return 0
 }
 
+# 版本号查不到不等于装不了: releases/latest/download/<文件名> 这个地址
+# 不需要知道版本号, 直连和镜像都认, 所以宁可继续走这条路也别让用户卡死。
+fall_back_to_latest_channel() {
+    log_warning "查不到版本号 (GitHub API 和网页都没通)"
+    log_info "改用 releases/latest 直下通道, 装到的就是最新正式版"
+    resolved_version="latest"
+    USE_LATEST_CHANNEL=yes
+    return 0
+}
+
+# 镜像挂掉时经常回一个 HTML 错误页, 大小不为零但根本不是程序,
+# 所以看一眼文件头的魔数, 别把网页拷到 agent 的位置上去。
+looks_like_binary() {
+    command -v od >/dev/null 2>&1 || return 0
+    _magic=$(head -c 4 "$1" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+    case "$_magic" in
+        7f454c46)                                     return 0 ;;  # ELF
+        cafebabe|cffaedfe|cefaedfe|feedface|feedfacf) return 0 ;;  # Mach-O
+        4d5a*)                                        return 0 ;;  # PE
+        *)                                            return 1 ;;
+    esac
+}
+
 download_agent() {
     _out="$1"
-    _base="https://github.com/${TARGET_REPO}/releases/download/${resolved_version}/${file_name}"
-
-    if [ -n "$GITHUB_PROXY" ]; then
-        _urls="${GITHUB_PROXY}/${_base}"
-    elif [ "$NO_MIRROR" = "true" ]; then
-        _urls="$_base"
+    if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
+        _base="https://github.com/${TARGET_REPO}/releases/latest/download/${file_name}"
     else
-        _urls="
-${_base}
-https://ghfast.top/${_base}
-https://gh-proxy.com/${_base}
-https://ghproxy.net/${_base}
-"
+        _base="https://github.com/${TARGET_REPO}/releases/download/${resolved_version}/${file_name}"
     fi
 
-    for _u in $_urls; do
+    for _u in $(mirror_urls "$_base"); do
         log_info "下载: ${CYAN}${_u}${NC}"
-        if curl -fL --connect-timeout 15 -o "$_out" "$_u" && [ -s "$_out" ]; then
-            chmod +x "$_out"
-            return 0
+        if curl -fL --progress-bar --connect-timeout 15 -o "$_out" "$_u" && [ -s "$_out" ]; then
+            if looks_like_binary "$_out"; then
+                chmod +x "$_out"
+                return 0
+            fi
+            log_warning "这个地址返回的不是可执行文件, 换下一个"
         fi
         rm -f "$_out"
     done
@@ -776,7 +876,7 @@ parse_service_file || {
 }
 
 # 需要写服务文件和二进制, 用户级 systemd 服务除外
-if [ "$EUID" -ne 0 ] && [ "$INIT_SYSTEM" != "systemd-user" ]; then
+if [ "$CURRENT_UID" -ne 0 ] && [ "$INIT_SYSTEM" != "systemd-user" ]; then
     log_error "需要 root 权限, 请用 sudo 运行"
     exit 1
 fi
@@ -838,14 +938,19 @@ log_info "平台: ${GREEN}${os_name}/${arch}${NC} -> ${GREEN}${file_name}${NC}"
 
 log_step "解析目标版本..."
 resolve_version || exit 1
-log_info "将要安装: ${GREEN}${resolved_version}${NC}"
+if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
+    version_label="latest (仓库最新正式版)"
+else
+    version_label="$resolved_version"
+fi
+log_info "将要安装: ${GREEN}${version_label}${NC}"
 
 if [ "$DRY_RUN" = true ]; then
     echo ""
     log_warning "dry-run 模式, 下面这些操作都不会真的执行:"
     log_info "  1. 停止服务 ${SERVICE_NAME}"
     log_info "  2. 备份 ${AGENT_PATH} 和 ${SERVICE_FILE}"
-    log_info "  3. 下载 ${TARGET_REPO} 的 ${resolved_version}/${file_name} 覆盖二进制"
+    log_info "  3. 下载 ${TARGET_REPO} 的 ${version_label} ${file_name} 覆盖二进制"
     if [ "$NEW_ARGS" != "$CURRENT_ARGS" ]; then
         log_info "  4. 把启动参数改成: $(mask_args "$NEW_ARGS")"
     else
@@ -867,6 +972,9 @@ log_step "下载新版本..."
 download_agent "$tmp_binary" || {
     log_error "下载失败, 直连和镜像都没成功"
     log_info "可以用 --ghproxy <前缀> 指定加速地址后重试"
+    if [ "$USE_LATEST_CHANNEL" = "yes" ]; then
+        log_info "也确认下 ${TARGET_REPO} 是否真的发过 ${file_name} 这个产物"
+    fi
     rm -f "$tmp_binary"
     exit 1
 }
@@ -898,7 +1006,7 @@ chmod +x "$AGENT_PATH"
 rm -f "$tmp_binary"
 
 # 保持原来的属主, 非 root 运行的服务换完还得能读能执行
-if [ "$EUID" -eq 0 ] && [ -f "${backup_path}/agent.bak" ]; then
+if [ "$CURRENT_UID" -eq 0 ] && [ -f "${backup_path}/agent.bak" ]; then
     _owner=$(ls -ln "${backup_path}/agent.bak" | awk '{print $3":"$4}')
     [ -n "$_owner" ] && chown "$_owner" "$AGENT_PATH" 2>/dev/null || true
 fi
@@ -941,7 +1049,7 @@ echo ""
 printf '%b\n' "${WHITE}===========================================${NC}"
 log_success "切换完成"
 log_config "仓库:     ${GREEN}${TARGET_REPO}${NC}"
-log_config "版本:     ${GREEN}${resolved_version}${NC}"
+log_config "版本:     ${GREEN}${version_label}${NC}"
 log_config "参数:     ${GREEN}$(mask_args "$NEW_ARGS")${NC}"
 if [ "$KEEP_BACKUP" = "true" ]; then
     log_config "备份:     ${GREEN}${backup_path}${NC}"
