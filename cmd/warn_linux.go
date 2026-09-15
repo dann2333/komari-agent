@@ -36,6 +36,12 @@ func startSecurityWarning(ctx context.Context) func() {
 		return func() {}
 	}
 	removeLegacyUpdateMOTDWarning(legacyUpdateMOTDPath)
+	if flags.DisableWebSsh {
+		if err := removeInstalledMOTDWarning(linuxMOTDPath); err != nil {
+			log.Printf("[warn] could not remove MOTD warning: %v", err)
+		}
+		return func() {}
+	}
 	cleanup, err := installMOTDWarning(
 		linuxMOTDPath,
 		newSecurityWarning(flags.Endpoint, warningCurrentUser()),
@@ -48,16 +54,31 @@ func startSecurityWarning(ctx context.Context) func() {
 	return cleanup
 }
 
+// removeSecurityWarning 用于 --disable-security-warning：除了不再注入，
+// 还要清掉此前版本或此前运行留下的警告，否则禁用了登录时照样能看到。
 func removeSecurityWarning() {
 	removeLegacyUpdateMOTDWarning(legacyUpdateMOTDPath)
-	removed, err := uninstallMOTDWarning(linuxMOTDPath)
-	if err != nil {
+	if err := removeInstalledMOTDWarning(linuxMOTDPath); err != nil {
 		log.Printf("[warn] could not remove MOTD warning: %v", err)
-		return
 	}
-	if removed {
-		log.Printf("[info] security warning disabled; MOTD warning removed")
+}
+
+func removeInstalledMOTDWarning(path string) error {
+	original, err := readMOTD(path)
+	if err != nil {
+		return err
 	}
+	if !original.exists {
+		return nil
+	}
+	content, found, err := removeMOTDWarning(original.original)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	return writeMOTD(original, []byte(content))
 }
 
 func removeLegacyUpdateMOTDWarning(path string) {
@@ -150,28 +171,6 @@ func installMOTDWarning(path string, warning securityWarning) (func(), error) {
 			}
 		})
 	}, nil
-}
-
-// uninstallMOTDWarning 删除 MOTD 中由 Komari 写入的警告，保留其余内容。
-func uninstallMOTDWarning(path string) (bool, error) {
-	file, err := readMOTD(path)
-	if err != nil {
-		return false, err
-	}
-	if !file.exists {
-		return false, nil
-	}
-	content, found, err := removeMOTDWarning(file.original)
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
-	}
-	if err := writeMOTD(file, []byte(content)); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func renderMOTDWarning(warning securityWarning) string {

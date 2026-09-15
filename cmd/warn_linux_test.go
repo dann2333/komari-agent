@@ -135,6 +135,33 @@ func TestMOTDWarningCreatesAndRemovesMissingFile(t *testing.T) {
 	}
 }
 
+func TestMOTDWarningIsRemovedWhenRemoteControlIsDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "motd")
+	const original = "Welcome to the server.\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := installMOTDWarning(path, newSecurityWarning("https://panel.example.com", "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+
+	if err := removeInstalledMOTDWarning(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), motdWarningStart) {
+		t.Fatalf("MOTD warning remained after remote control was disabled: %q", data)
+	}
+	if !strings.Contains(string(data), original) {
+		t.Fatalf("original MOTD content was not preserved: %q", data)
+	}
+}
+
 func TestMOTDWarningRejectsMalformedManagedBlock(t *testing.T) {
 	for name, content := range map[string]string{
 		"incomplete": motdWarningStart + "\npartial\n",
@@ -204,7 +231,9 @@ func TestLegacyUpdateMOTDHookCleanup(t *testing.T) {
 	}
 }
 
-func TestUninstallMOTDWarningRemovesManagedBlock(t *testing.T) {
+// 上游的 TestMOTDWarningIsRemovedWhenRemoteControlIsDisabled 覆盖了基本清理，
+// 这里补幂等、缺文件和非托管内容三种情况。
+func TestRemoveInstalledMOTDWarningIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "motd")
 	const original = "Welcome to the server.\n"
 	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
@@ -214,18 +243,14 @@ func TestUninstallMOTDWarningRemovesManagedBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := uninstallMOTDWarning(path)
-	if err != nil {
+	if err := removeInstalledMOTDWarning(path); err != nil {
 		t.Fatal(err)
-	}
-	if !removed {
-		t.Fatal("managed block was reported as absent")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 卸载只删除托管块本身，管理员原有内容按原样保留。
+	// 只删除托管块本身，管理员原有内容按原样保留。
 	if !strings.HasPrefix(string(data), original) || strings.Contains(string(data), motdWarningStart) {
 		t.Fatalf("managed block was not removed cleanly: %q", data)
 	}
@@ -233,20 +258,25 @@ func TestUninstallMOTDWarningRemovesManagedBlock(t *testing.T) {
 		t.Fatalf("MOTD lost administrator content:\nwant %q\n got %q", original, data)
 	}
 
-	removed, err = uninstallMOTDWarning(path)
+	// 再删一次不能再动文件
+	before := string(data)
+	if err := removeInstalledMOTDWarning(path); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed {
-		t.Fatal("reported a removal without a managed block")
+	if string(after) != before {
+		t.Fatalf("第二次清理又改了文件:\nwant %q\n got %q", before, after)
 	}
 }
 
-func TestUninstallMOTDWarningLeavesUnmanagedContent(t *testing.T) {
+func TestRemoveInstalledMOTDWarningLeavesUnmanagedContent(t *testing.T) {
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "motd")
-	if removed, err := uninstallMOTDWarning(missing); err != nil || removed {
-		t.Fatalf("unexpected result for a missing MOTD: %v, %v", removed, err)
+	if err := removeInstalledMOTDWarning(missing); err != nil {
+		t.Fatalf("unexpected error for a missing MOTD: %v", err)
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Fatalf("a missing MOTD was created: %v", err)
@@ -257,8 +287,8 @@ func TestUninstallMOTDWarningLeavesUnmanagedContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if removed, err := uninstallMOTDWarning(path); err != nil || removed {
-		t.Fatalf("unexpected result for an unmanaged MOTD: %v, %v", removed, err)
+	if err := removeInstalledMOTDWarning(path); err != nil {
+		t.Fatalf("unexpected error for an unmanaged MOTD: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != content {

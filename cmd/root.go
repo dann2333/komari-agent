@@ -69,11 +69,12 @@ var RootCmd = &cobra.Command{
 		defer stop()
 
 		stopWarning := func() {}
-		switch {
-		case flags.DisableSecurityWarning:
+		if flags.DisableSecurityWarning {
 			// 清理此前版本或此前运行留下的警告，避免禁用后仍然显示
 			removeSecurityWarning()
-		case !flags.DisableWebSsh:
+		} else {
+			// DisableWebSsh 的判断在 startSecurityWarning 内部：
+			// 关闭远程控制时同样要清掉已经注入的 MOTD
 			stopWarning = startSecurityWarning(stopCtx)
 		}
 		defer stopWarning()
