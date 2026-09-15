@@ -66,6 +66,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         exclude:
           - goos: windows
@@ -144,5 +145,8 @@ jobs:
           fi
           SWITCH_NAME=komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}
           [ -f "$SWITCH_NAME" ] || SWITCH_NAME=""
-          gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME $SWITCH_NAME --repo ${{ github.repository }}
+          # --clobber: 同一个 tag 重跑一次时直接覆盖同名产物,
+          # 否则 gh 会报 "asset under the same name already exists" 然后整个矩阵挂掉
+          gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME $SWITCH_NAME \
+            --clobber --repo ${{ github.repository }}
         shell: bash
