@@ -64,6 +64,47 @@ export AGENT_TOKEN="your-token"
 | `update_repo` | `AGENT_UPDATE_REPO` | `--update-repo` | 自动更新使用的发布仓库，形如 `owner/name`，默认 `dann2333/komari-agent` | 未发布 |
 | `update_api_url` | `AGENT_UPDATE_API_URL` | `--update-api-url` | 自动更新使用的 GitHub 兼容 API 基地址，默认 `https://api.github.com`；GitHub Enterprise 需填写到 `/api/v3` | 未发布 |
 
+## 从官方版切换过来
+
+已经装了官方版 agent 的话，用 `switch-to-fork.sh` 可以直接换成本仓库的版本，
+原有的 endpoint、token 和其它参数都会保留：
+
+```bash
+# 交互式：会列出当前参数，可以逐项改完再切
+curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh
+
+# 不交互，直接按默认配置切换
+curl -fsSL https://raw.githubusercontent.com/dann2333/komari-agent/main/switch-to-fork.sh | sudo sh -s -- --yes
+
+# 先看看它打算做什么，不改动任何东西
+sudo sh switch-to-fork.sh --dry-run
+
+# 换回切换前的版本
+sudo sh switch-to-fork.sh --revert
+```
+
+脚本会自动找到已安装的服务（systemd / systemd user / OpenRC / procd / upstart / launchd），
+读出当前启动参数，下载对应平台的二进制，替换后重启服务。
+切换前会把原二进制和服务文件备份到 `<安装目录>/.komari-switch-backup`，
+新版本起不来会自动回滚。
+
+常用参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--repo <owner/name>` | 目标仓库，默认 `dann2333/komari-agent` |
+| `--version <ver>` | `auto`（默认，优先正式版）/ `latest` / `snapshot` / 具体 tag |
+| `--service-name <name>` | 指定服务名，默认自动探测 |
+| `--add-flag <flag>` | 切换时追加参数，可重复，如 `--add-flag --disable-security-warning` |
+| `--remove-flag <flag>` | 切换时移除参数，可重复 |
+| `--ghproxy <prefix>` | GitHub 加速前缀 |
+| `-y, --yes` | 不交互 |
+| `--dry-run` | 只预览不改动 |
+| `--revert` | 回滚到切换前的版本 |
+
+脚本开头的可配置项也可以用环境变量覆盖，例如
+`KOMARI_ADD_FLAGS="--disable-security-warning" sudo -E sh switch-to-fork.sh --yes`。
+
 完整参数可运行：
 
 ```bash
