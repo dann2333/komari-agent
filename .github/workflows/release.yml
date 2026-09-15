@@ -121,7 +121,6 @@ jobs:
           fi
             go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
-
       - name: Build switcher
         if: ${{ matrix.goos != 'windows' }}
         env:

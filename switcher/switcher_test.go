@@ -1,10 +1,13 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSplitArgsKeepsQuotedTokens(t *testing.T) {
@@ -203,5 +206,83 @@ func TestDownloadURL(t *testing.T) {
 	}
 	if got := downloadURL("o/r", "latest", "asset", true); got != "https://github.com/o/r/releases/latest/download/asset" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestDownloadGivesUpOnAStalledMirror(t *testing.T) {
+	old := stallTimeout
+	stallTimeout = 200 * time.Millisecond
+	defer func() { stallTimeout = old }()
+
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1048576")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{0x7f, 'E', 'L', 'F', 0})
+		w.(http.Flusher).Flush()
+		time.Sleep(10 * time.Second) // 连上了就是不给数据
+	}))
+	defer stalled.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(append([]byte{0x7f, 'E', 'L', 'F'}, make([]byte, 128)...))
+	}))
+	defer good.Close()
+
+	f := &fetcher{noMirror: true}
+	// 第一个卡住, 第二个正常; candidates 只给直连, 所以这里直接改列表
+	f.mirrors = nil
+	dest := filepath.Join(t.TempDir(), "agent")
+
+	start := time.Now()
+	err := f.download(stalled.URL+"/x", dest, func(string, ...interface{}) {})
+	if err == nil {
+		t.Fatal("a stalled mirror must fail instead of hanging")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("gave up after %v, watchdog did not fire", elapsed)
+	}
+	if _, statErr := os.Stat(dest); statErr == nil {
+		t.Fatal("the half-written file must not be left behind")
+	}
+
+	if err := f.download(good.URL+"/x", dest, func(string, ...interface{}) {}); err != nil {
+		t.Fatalf("healthy download failed: %v", err)
+	}
+	if !looksLikeBinary(dest) {
+		t.Fatal("downloaded file did not survive")
+	}
+}
+
+func TestDownloadRejectsAnHTMLErrorPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+	}))
+	defer srv.Close()
+
+	f := &fetcher{noMirror: true}
+	dest := filepath.Join(t.TempDir(), "agent")
+	if err := f.download(srv.URL+"/x", dest, func(string, ...interface{}) {}); err == nil {
+		t.Fatal("an HTML page must not be accepted as the agent binary")
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("the rejected payload must be deleted")
+	}
+}
+
+func TestResolveVersionFallsBackToLatestChannel(t *testing.T) {
+	// 所有元数据请求都失败的网络: 应该退回 latest 直下通道, 而不是报错退出
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "blocked", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	f := &fetcher{ghproxy: srv.URL, noMirror: true}
+	v, latestChannel, err := resolveVersion(f, "o/r", "auto")
+	if err != nil || !latestChannel || v != "latest" {
+		t.Fatalf("resolveVersion = %q, %v, %v", v, latestChannel, err)
+	}
+	// 快照没有免版本号的通道, 只能如实报错
+	if _, _, err := resolveVersion(f, "o/r", "snapshot"); err == nil {
+		t.Fatal("snapshot resolution must fail loudly")
 	}
 }

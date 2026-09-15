@@ -236,16 +236,16 @@ func (s *service) writeArgs(binary string, args []string) error {
 		replaceFirst(
 			func(t string) bool { return strings.HasPrefix(t, "ExecStart=") },
 			func(l string) string {
-				prefix := strings.TrimLeft(strings.TrimPrefix(strings.TrimSpace(l), "ExecStart="), "")
-				flags := ""
-				for _, c := range prefix {
-					if strings.ContainsRune("-@+!", c) {
-						flags += string(c)
-						continue
+				// ExecStart=-/path 里那个 - 是 systemd 的前缀修饰符, 得留着
+				rest := strings.TrimPrefix(strings.TrimSpace(l), "ExecStart=")
+				modifiers := ""
+				for _, c := range rest {
+					if !strings.ContainsRune("-@+!", c) {
+						break
 					}
-					break
+					modifiers += string(c)
 				}
-				return "ExecStart=" + flags + cmdline
+				return "ExecStart=" + modifiers + cmdline
 			})
 	case "openrc":
 		replaceFirst(
