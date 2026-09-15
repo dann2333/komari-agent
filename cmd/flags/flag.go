@@ -13,7 +13,7 @@ type Config struct {
 	Interval               float64 `json:"interval" env:"AGENT_INTERVAL"`                                 // 数据采集间隔，单位秒
 	IgnoreUnsafeCert       bool    `json:"ignore_unsafe_cert" env:"AGENT_IGNORE_UNSAFE_CERT"`             // 忽略不安全的证书
 	MaxRetries             int     `json:"max_retries" env:"AGENT_MAX_RETRIES"`                           // 最大重试次数
-	ReconnectInterval      int     `json:"reconnect_interval" env:"AGENT_RECONNECT_INTERVAL"`             // 重连间隔，单位秒
+	ReconnectInterval      int     `json:"reconnect_interval" env:"AGENT_RECONNECT_INTERVAL"`             // 重连退避的上限，单位秒；断线立刻重连，失败后从 1 秒起退避
 	InfoReportInterval     int     `json:"info_report_interval" env:"AGENT_INFO_REPORT_INTERVAL"`         // 基础信息上报间隔，单位分钟
 	IncludeNics            string  `json:"include_nics" env:"AGENT_INCLUDE_NICS"`                         // 仅统计网卡，逗号分隔的网卡名称列表，支持通配符
 	ExcludeNics            string  `json:"exclude_nics" env:"AGENT_EXCLUDE_NICS"`                         // 统计时排除的网卡，逗号分隔的网卡名称列表，支持通配符

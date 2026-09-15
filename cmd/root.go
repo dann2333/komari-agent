@@ -58,8 +58,14 @@ var RootCmd = &cobra.Command{
 		if err := update.SetReleaseSource(flags.UpdateRepo, flags.UpdateAPIURL); err != nil {
 			return err
 		}
-		// 捕获中止信号，优雅退出
-		stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		// 捕获中止信号，优雅退出。
+		// 这里不用 signal.NotifyContext：那样 RunE 正常返回时 defer 的 stop()
+		// 也会让 ctx 结束，下面的收尾协程会抢先 os.Exit(0)，
+		// 把本该 exit 1 的配置错误变成 exit 0，错误信息还可能来不及打完。
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sigCh)
+		stopCtx, stop := context.WithCancel(context.Background())
 		defer stop()
 
 		stopWarning := func() {}
@@ -72,8 +78,14 @@ var RootCmd = &cobra.Command{
 		}
 		defer stopWarning()
 		go func() {
-			<-stopCtx.Done()
+			select {
+			case <-sigCh:
+			case <-stopCtx.Done():
+				// RunE 已经返回，收尾交给 defer，这里直接退出协程
+				return
+			}
 			log.Printf("shutting down gracefully...")
+			stop()
 			stopWarning()
 			netstatic.Stop()
 			os.Exit(0)
@@ -130,13 +142,15 @@ var RootCmd = &cobra.Command{
 		if flags.IgnoreUnsafeCert {
 			http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		}
-		// 自动更新
+		// 自动更新。检查和下载都放后台：这里原本是同步调用，排在首次
+		// WebSocket 连接之前，下载一个几十 MB 的新版本期间面板上就是离线。
 		if !flags.DisableAutoUpdate {
-			err := update.CheckAndUpdate()
-			if err != nil {
-				log.Println("[ERROR]", err)
-			}
-			go update.DoUpdateWorks()
+			go func() {
+				if err := update.CheckAndUpdate(); err != nil {
+					log.Println("[ERROR]", err)
+				}
+				update.DoUpdateWorks()
+			}()
 		}
 		go server.DoUploadBasicInfoWorks()
 		for {
@@ -182,7 +196,7 @@ func init() {
 	RootCmd.PersistentFlags().Float64VarP(&flags.Interval, "interval", "i", 3.0, "Interval in seconds")
 	RootCmd.PersistentFlags().BoolVarP(&flags.IgnoreUnsafeCert, "ignore-unsafe-cert", "u", false, "Ignore unsafe certificate errors")
 	RootCmd.PersistentFlags().IntVarP(&flags.MaxRetries, "max-retries", "r", 3, "Maximum number of retries")
-	RootCmd.PersistentFlags().IntVarP(&flags.ReconnectInterval, "reconnect-interval", "c", 5, "Reconnect interval in seconds")
+	RootCmd.PersistentFlags().IntVarP(&flags.ReconnectInterval, "reconnect-interval", "c", 5, "Upper bound in seconds for reconnect backoff; a dropped connection reconnects immediately and retries start at 1s")
 	RootCmd.PersistentFlags().IntVar(&flags.InfoReportInterval, "info-report-interval", 5, "Interval in minutes for reporting basic info")
 	RootCmd.PersistentFlags().StringVar(&flags.IncludeNics, "include-nics", "", "Comma-separated list of network interfaces to include")
 	RootCmd.PersistentFlags().StringVar(&flags.ExcludeNics, "exclude-nics", "", "Comma-separated list of network interfaces to exclude")

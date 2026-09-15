@@ -78,7 +78,10 @@ func EstablishWebSocketConnection() {
 						log.Println("Failed to connect to WebSocket:", err)
 					}
 					retry++
-					time.Sleep(time.Duration(flags.ReconnectInterval) * time.Second)
+					if retry > flags.MaxRetries {
+						break
+					}
+					time.Sleep(reconnectBackoff(retry))
 				}
 
 				if retry > flags.MaxRetries {
@@ -106,6 +109,7 @@ func EstablishWebSocketConnection() {
 				conn.Close()
 				conn = nil // Mark connection as dead
 				readDone = nil
+				conn, readDone = reconnectNow()
 				continue
 			}
 		case <-heartbeatTicker.C:
@@ -116,6 +120,7 @@ func EstablishWebSocketConnection() {
 					conn.Close()
 					conn = nil // Mark connection as dead
 					readDone = nil
+					conn, readDone = reconnectNow()
 				}
 			}
 		case <-readDone:
@@ -125,8 +130,44 @@ func EstablishWebSocketConnection() {
 				conn = nil
 			}
 			readDone = nil
+			conn, readDone = reconnectNow()
 		}
 	}
+}
+
+// reconnectNow 在发现连接已断时立刻尝试一次重连，成功就不用等到下一个 tick。
+// 失败不做重试，交给主循环按 reconnectBackoff 的节奏继续。
+func reconnectNow() (*ws.SafeConn, <-chan struct{}) {
+	conn, err := connectWebSocket(buildWebSocketEndpoint())
+	if err != nil {
+		log.Println("Immediate reconnect failed:", err)
+		return nil, nil
+	}
+	log.Println("WebSocket reconnected")
+	done := make(chan struct{})
+	go handleWebSocketMessages(conn, done)
+	return conn, done
+}
+
+// reconnectBackoff 返回第 attempt 次重试前的等待时间：从 1 秒起步逐次翻倍，
+// 以 --reconnect-interval 为上限。断线后能更快回来，服务端长时间不可用时
+// 又不会一直高频重试。
+func reconnectBackoff(attempt int) time.Duration {
+	limit := time.Duration(flags.ReconnectInterval) * time.Second
+	if limit <= time.Second {
+		if limit < 0 {
+			return 0
+		}
+		return limit
+	}
+	delay := time.Second
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= limit {
+			return limit
+		}
+	}
+	return delay
 }
 
 func buildWebSocketEndpoint() string {
