@@ -78,6 +78,7 @@ var RootCmd = &cobra.Command{
 			stopWarning = startSecurityWarning(stopCtx)
 		}
 		defer stopWarning()
+		shutdown := newShutdownCoordinator(stopWarning, netstatic.Stop, os.Exit)
 		go func() {
 			select {
 			case <-sigCh:
@@ -87,9 +88,7 @@ var RootCmd = &cobra.Command{
 			}
 			log.Printf("shutting down gracefully...")
 			stop()
-			stopWarning()
-			netstatic.Stop()
-			os.Exit(0)
+			shutdown.shutdown(0)
 		}()
 
 		if flags.MonthRotate != 0 {
@@ -128,6 +127,12 @@ var RootCmd = &cobra.Command{
 				return fmt.Errorf("auto-discovery failed: %w", err)
 			}
 		}
+		if err := pkg_flags.CaptureStartupConfig(map[string]interface{}{
+			"warning_panel_host":  warningPanelHost,
+			"warning_run_as_user": warningRunAsUser,
+		}); err != nil {
+			return fmt.Errorf("failed to capture startup configuration: %w", err)
+		}
 		diskList, err := monitoring.DiskList()
 		if err != nil {
 			log.Println("Failed to get disk list:", err)
@@ -143,20 +148,18 @@ var RootCmd = &cobra.Command{
 		if flags.IgnoreUnsafeCert {
 			http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		}
-		// 自动更新。检查和下载都放后台：这里原本是同步调用，排在首次
-		// WebSocket 连接之前，下载一个几十 MB 的新版本期间面板上就是离线。
+		// 自动更新：后台立即检查一次并按周期复查，避免启动被 GitHub 访问阻塞
 		if !flags.DisableAutoUpdate {
-			go func() {
-				if err := update.CheckAndUpdate(); err != nil {
-					log.Println("[ERROR]", err)
-				}
-				update.DoUpdateWorks()
-			}()
+			go update.DoUpdateWorks(func() {
+				shutdown.shutdown(42)
+			})
 		}
 		go server.DoUploadBasicInfoWorks()
 		for {
 			server.UpdateBasicInfo()
-			server.EstablishWebSocketConnection()
+			server.EstablishWebSocketConnection(func() {
+				shutdown.shutdown(42)
+			})
 		}
 	},
 }
