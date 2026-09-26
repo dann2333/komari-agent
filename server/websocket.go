@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,6 +33,11 @@ var (
 const (
 	v2SeenEventTTL   = 10 * time.Minute
 	v2SeenEventLimit = 4096
+
+	// 心跳间隔, 以及多久没收到 pong/消息就认定连接已经死了。
+	// 面板那边的读超时是 75 秒, 这里要比它先发现, 才能尽快重连回来。
+	heartbeatInterval = 15 * time.Second
+	pongWait          = 40 * time.Second
 )
 
 func EstablishWebSocketConnection(onRestartRequired func()) {
@@ -51,7 +57,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 	reportInterval := time.Duration(interval * float64(time.Second))
 	nextReportAt := time.Now()
 
-	heartbeatTicker := time.NewTicker(30 * time.Second)
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
 	defer heartbeatTicker.Stop()
 
 	var readDone <-chan struct{}
@@ -70,9 +76,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 					conn, err = connectWebSocket(websocketEndpoint)
 					if err == nil {
 						log.Println("WebSocket connected using v2 protocol")
-						done := make(chan struct{})
-						readDone = done
-						go handleWebSocketMessages(conn, done, onRestartRequired)
+						readDone = startSession(conn, onRestartRequired)
 						break
 					} else {
 						log.Println("Failed to connect to WebSocket:", err)
@@ -92,9 +96,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 						return
 					}
 					log.Println("WebSocket recovered from POST fallback")
-					done := make(chan struct{})
-					readDone = done
-					go handleWebSocketMessages(conn, done, onRestartRequired)
+					readDone = startSession(conn, onRestartRequired)
 				}
 			}
 			if conn == nil || time.Now().Before(nextReportAt) {
@@ -114,7 +116,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 			}
 		case <-heartbeatTicker.C:
 			if conn != nil {
-				err := conn.WriteMessage(websocket.PingMessage, nil)
+				err := conn.WritePing()
 				if err != nil {
 					log.Println("Failed to send heartbeat:", err)
 					conn.Close()
@@ -144,9 +146,20 @@ func reconnectNow(onRestartRequired func()) (*ws.SafeConn, <-chan struct{}) {
 		return nil, nil
 	}
 	log.Println("WebSocket reconnected")
+	return conn, startSession(conn, onRestartRequired)
+}
+
+// startSession 给新连接装上存活检测并开始读消息, 返回的 channel 在连接断开
+// (包括心跳超时) 时关闭。连上就先 ping 一次: 存活检测从第一个 pong 起才计时,
+// 越早拿到 pong, 刚连上就掉的情况也越早能发现。
+func startSession(conn *ws.SafeConn, onRestartRequired func()) <-chan struct{} {
+	conn.EnableHeartbeat(pongWait)
 	done := make(chan struct{})
 	go handleWebSocketMessages(conn, done, onRestartRequired)
-	return conn, done
+	if err := conn.WritePing(); err != nil {
+		log.Println("Failed to send initial heartbeat:", err)
+	}
+	return done
 }
 
 // reconnectBackoff 返回第 attempt 次重试前的等待时间：从 1 秒起步逐次翻倍，
@@ -389,7 +402,11 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}, onRestartR
 	for {
 		_, message_raw, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("WebSocket read error:", err)
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("No heartbeat reply for %s, connection is dead", pongWait)
+			} else {
+				log.Println("WebSocket read error:", err)
+			}
 			return
 		}
 		var message v2.Request
