@@ -123,8 +123,12 @@ jobs:
           CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          # 文件名必须以 .bin 结尾: 1.5.10 及更早的 agent 用 go-github-selfupdate 自更新,
+          # 它挑 release 里第一个以 <os>-<arch> 结尾的文件, 不加后缀的话
+          # komari-switch-linux-amd64 会和 komari-agent-linux-amd64 撞上,
+          # 顺序一变, 旧 agent 就会把自己换成切换器然后起不来。
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
-            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }} ./switcher
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin ./switcher
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4

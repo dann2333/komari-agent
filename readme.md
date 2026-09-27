@@ -79,11 +79,12 @@ export AGENT_TOKEN="your-token"
 
 有些机器上的 curl 是没编 https 的（`curl: (1) Protocol "https" not supported or disabled in libcurl`），
 这种环境里脚本寸步难行。`komari-switch` 是个 6MB 出头的单文件程序，自己做 HTTPS 下载，
-什么都不依赖。每个 release 里都有，按平台挑一个：
+什么都不依赖。每个 release 里都有，按平台挑一个（文件名形如 `komari-switch-<系统>-<架构>.bin`，
+`.bin` 后缀是故意的：没有它，1.5.10 及更早的 agent 自更新时可能把切换器错当成自己下载下来）：
 
 ```bash
 curl -fsSL -o komari-switch \
-  https://github.com/dann2333/komari-agent/releases/latest/download/komari-switch-linux-amd64
+  https://github.com/dann2333/komari-agent/releases/latest/download/komari-switch-linux-amd64.bin
 chmod +x komari-switch
 sudo ./komari-switch              # 交互式：列出当前参数，可以逐项改完再切
 sudo ./komari-switch -y           # 一键：不问，直接换成最新正式版

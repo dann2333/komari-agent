@@ -100,6 +100,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # 按 tag 构建, 而不是触发工作流时的分支: 手动重跑老版本 (比如 1.5.10)
+          # 时, 否则会拿当前 main 的代码编出来, 再用 --clobber 覆盖掉那个版本的产物
+          ref: refs/tags/${{ needs.prepare.outputs.version }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -130,8 +134,14 @@ jobs:
           CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          # 文件名必须以 .bin 结尾: 1.5.10 及更早的 agent 用 go-github-selfupdate 自更新,
+          # 它挑 release 里第一个以 <os>-<arch> 结尾的文件, 不加后缀的话
+          # komari-switch-linux-amd64 会和 komari-agent-linux-amd64 撞上,
+          # 顺序一变, 旧 agent 就会把自己换成切换器然后起不来。
+          # 加入切换器之前打的 tag 里没有这个目录, 重跑那些版本时跳过
+          [ -d switcher ] || { echo "no switcher in this tag, skipping"; exit 0; }
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
-            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }} ./switcher
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin ./switcher
 
       - name: Upload binary to release
         env:
@@ -143,8 +153,22 @@ jobs:
           elif [ "${{ matrix.goos }}" = "darwin" ]; then
             true
           fi
-          SWITCH_NAME=komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}
+          SWITCH_NAME=komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin
           [ -f "$SWITCH_NAME" ] || SWITCH_NAME=""
+          # 1.5.10 及更早的 agent (go-github-selfupdate) 会把 release 里第一个以
+          # <os>[-_]<arch>[扩展名] 结尾的文件当成自己的新版本。除 agent 本体外,
+          # 任何撞上这条规则的产物都可能被旧 agent 下载成自己, 发布前拦住。
+          for f in $SWITCH_NAME; do
+            for sep in - _; do
+              for ext in "" .zip .tar.gz .tgz .gzip .gz .tar.xz .xz; do
+                case "$f" in
+                  *"${{ matrix.goos }}${sep}${{ matrix.goarch }}${ext}")
+                    echo "::error::$f would be picked up by old agents as their own update"
+                    exit 1 ;;
+                esac
+              done
+            done
+          done
           # --clobber: 同一个 tag 重跑一次时直接覆盖同名产物,
           # 否则 gh 会报 "asset under the same name already exists" 然后整个矩阵挂掉
           gh release upload ${{ needs.prepare.outputs.version }} $BINARY_NAME $SWITCH_NAME \
