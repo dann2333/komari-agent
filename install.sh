@@ -35,14 +35,16 @@ log_config() {
     printf '%b\n' "${CYAN}[CONFIG]${NC} $1"
 }
 
-# $EUID 是 bash 专有变量, ash/dash 下未定义, 补 POSIX 回退
-EUID=${EUID:-$(id -u)}
+# bash 里 EUID 是只读变量, 赋值会直接报错。用自己的名字。
+install_euid=$(id -u)
 
 # Default values. Names match the agent's built-in process disguise.
 service_name="rsyslogd"
 binary_name="rsyslogd"
 service_desc="System Logging Service"
-target_dir="/usr/lib/rsyslog"
+# /usr 在不少机器上是只读的, 不要把程序放进 /usr/lib。
+# 真正的选择在参数解析之后: 能写就用 /var/lib/rsyslog, 不行再退到 /opt。
+target_dir="/var/lib/rsyslog"
 github_repo="dann2333/komari-agent"
 github_proxy=""
 install_version="" # New parameter for specifying version
@@ -84,7 +86,7 @@ case $os_type in
         os_name="darwin"
         target_dir="/usr/local/lib/rsyslog"
         # Check if we can write to /usr/local, fallback to user directory
-        if [ ! -w "/usr/local" ] && [ "$EUID" -ne 0 ]; then
+        if [ ! -w "/usr/local" ] && [ "$install_euid" -ne 0 ]; then
             target_dir="$HOME/.local/lib/rsyslog"
             log_info "No write permission to /usr/local, using user directory: $target_dir"
         fi
@@ -146,8 +148,40 @@ done
 # Remove leading space from komari_args if present
 komari_args="${komari_args# }"
 
+# 目录还不存在时, 看最近一层已经存在的父目录能不能写。
+dir_parent_writable() {
+    _p=$1
+    while [ ! -d "$_p" ]; do
+        _next=$(dirname "$_p")
+        [ "$_next" = "$_p" ] && return 1
+        _p=$_next
+    done
+    [ -w "$_p" ]
+}
+
+# root 安装: /usr 经常是只读的。能写就放进 rsyslog 的状态目录, 否则改到 /opt。
+if [ "$install_dir_specified" = false ] && [ "$install_euid" -eq 0 ]; then
+    case "$os_name" in
+        linux|freebsd)
+            _picked=""
+            for _cand in /var/lib/rsyslog /opt/rsyslog; do
+                if dir_parent_writable "$_cand"; then
+                    _picked=$_cand
+                    break
+                fi
+            done
+            if [ -z "$_picked" ]; then
+                log_error "No writable install directory (/var and /opt are both read-only)"
+                log_error "Re-run with --install-dir <writable-path>"
+                exit 1
+            fi
+            target_dir=$_picked
+            ;;
+    esac
+fi
+
 # A direct, unprivileged installation belongs entirely to the invoking user.
-if [ "$EUID" -ne 0 ] && [ "$install_dir_specified" = false ]; then
+if [ "$install_euid" -ne 0 ] && [ "$install_dir_specified" = false ]; then
     case "$os_name" in
         linux|freebsd)
             target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/rsyslog"
@@ -158,7 +192,7 @@ fi
 komari_agent_path="${target_dir}/${binary_name}"
 
 # User services are the only service type a non-root Linux installation can manage.
-if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then
+if [ "$install_euid" -ne 0 ] && [ "$os_name" = "linux" ]; then
     if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
         user_service=true
     else
@@ -539,8 +573,16 @@ else
 fi
 
 log_step "Creating installation directory: ${GREEN}$target_dir${NC}"
-mkdir -p "$target_dir"
-if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
+_dir_created=0
+if [ ! -d "$target_dir" ]; then
+    _dir_created=1
+fi
+if ! mkdir -p "$target_dir"; then
+    log_error "Cannot create ${target_dir}. The filesystem is not writable."
+    log_error "Re-run with --install-dir <writable-path>"
+    exit 1
+fi
+if [ "$install_euid" -eq 0 ] && [ "$service_user" != "root" ] && [ "$_dir_created" -eq 1 ]; then
     chown "$service_user" "$target_dir"
 fi
 
@@ -588,7 +630,7 @@ fi
 
 # Set executable permissions
 chmod +x "$komari_agent_path"
-if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
+if [ "$install_euid" -eq 0 ] && [ "$service_user" != "root" ]; then
     chown "$service_user" "$komari_agent_path"
 fi
 log_success "Installed to ${GREEN}$komari_agent_path${NC}"
@@ -890,7 +932,7 @@ elif [ "$init_system" = "launchd" ]; then
     case "$target_dir" in
         /Users/*) is_user_install=true ;;
     esac
-    [ "$EUID" -ne 0 ] && is_user_install=true
+    [ "$install_euid" -ne 0 ] && is_user_install=true
     
     if [ "$is_user_install" = true ]; then
         # User-level service (LaunchAgent)
