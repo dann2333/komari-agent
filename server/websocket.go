@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
 	"github.com/komari-monitor/komari-agent/monitoring"
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
@@ -462,7 +463,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			log.Printf("bad v2 terminal params: %v", err)
 		}
 	case v2.MethodAgentMessage, v2.MethodAgentEvent:
-		log.Printf("received v2 %s: %+v", method, params)
+		pkg_flags.LogStatusf("received v2 %s: %+v", method, params)
 		return true
 	case v2.MethodAgentFile:
 		var operation v2.FileOperation

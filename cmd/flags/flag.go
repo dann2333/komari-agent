@@ -1,5 +1,7 @@
 package flags_pkg
 
+import "log"
+
 type Config struct {
 	AutoDiscoveryKey       string  `json:"auto_discovery_key" env:"AGENT_AUTO_DISCOVERY_KEY"`             // 自动发现密钥
 	DisableAutoUpdate      bool    `json:"disable_auto_update" env:"AGENT_DISABLE_AUTO_UPDATE"`           // 禁用自动更新
@@ -38,3 +40,9 @@ type Config struct {
 }
 
 var GlobalConfig = &Config{}
+
+func LogStatusf(format string, args ...any) {
+	if GlobalConfig.ShowBanner {
+		log.Printf(format, args...)
+	}
+}

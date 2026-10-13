@@ -21,6 +21,7 @@ import (
 
 	"github.com/blang/semver"
 	goupdate "github.com/inconshreveable/go-update"
+	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
 )
 
@@ -543,7 +544,7 @@ func installRelease(candidate releaseCandidate) error {
 		return fmt.Errorf("failed to resolve current executable path: %w", err)
 	}
 
-	log.Printf("Will update %s from %s to %s\n", cmdPath, CurrentVersion, candidate.TagName)
+	pkg_flags.LogStatusf("Will update %s from %s to %s", cmdPath, CurrentVersion, candidate.TagName)
 
 	data, err := downloadAsset(getHTTPClient(), owner, repo, candidate.Asset)
 	if err != nil {
@@ -556,7 +557,7 @@ func installRelease(candidate releaseCandidate) error {
 		return fmt.Errorf("failed to update to version %s: %w", candidate.TagName, err)
 	}
 
-	log.Printf("Successfully updated to version %s\n", candidate.TagName)
+	pkg_flags.LogStatusf("Successfully updated to version %s", candidate.TagName)
 	return ErrRestartRequired
 }
 
@@ -631,14 +632,14 @@ func checkAndUpdateStable(current *semver.Version, target updateTarget, deps upd
 	latest, found := selectLatestStableRelease(releases, assetName, target)
 	if !found {
 		if target.kind == targetCurrentLine {
-			log.Printf("No stable release asset was found for %s in %d.%d.*.", assetName, current.Major, current.Minor)
+			pkg_flags.LogStatusf("No stable release asset was found for %s in %d.%d.*.", assetName, current.Major, current.Minor)
 			return nil
 		}
 		return fmt.Errorf("no stable release matching %q was found for %s", target.input, assetName)
 	}
 
 	if !stableNeedsUpdate(current, latest.Version, target) {
-		log.Println("Current stable version is up-to-date:", CurrentVersion)
+		pkg_flags.LogStatusf("Current stable version is up-to-date: %s", CurrentVersion)
 		return nil
 	}
 
@@ -661,12 +662,12 @@ func checkAndUpdateSnapshot(target updateTarget, deps updateDeps) error {
 		if target.kind != targetSnapshotLatest {
 			return fmt.Errorf("no snapshot release matching %q was found for %s", target.input, assetName)
 		}
-		log.Printf("No suitable snapshot release asset was found for %s. Current snapshot is considered up-to-date.", assetName)
+		pkg_flags.LogStatusf("No suitable snapshot release asset was found for %s. Current snapshot is considered up-to-date.", assetName)
 		return nil
 	}
 
 	if !snapshotNeedsUpdate(CurrentVersion, latest) {
-		log.Println("Current snapshot version is the latest:", CurrentVersion)
+		pkg_flags.LogStatusf("Current snapshot version is the latest: %s", CurrentVersion)
 		return nil
 	}
 
@@ -691,11 +692,11 @@ func checkAndUpdateTarget(target updateTarget, deps updateDeps) error {
 }
 
 func runUpdateCheck(deps updateDeps) error {
-	log.Println("Checking update...")
+	pkg_flags.LogStatusf("Checking update...")
 
 	// 容器内（无论 stable 还是 snapshot）一律跳过二进制自升级，避免容器重建后版本回退。
 	if deps.isContainer() {
-		log.Println("Agent is running in a container; skip binary self-update. Refresh the container image instead.")
+		pkg_flags.LogStatusf("Agent is running in a container; skip binary self-update. Refresh the container image instead.")
 		return nil
 	}
 
@@ -707,7 +708,7 @@ func runUpdateCheck(deps updateDeps) error {
 	if err != nil {
 		// 无法解析的版本（例如本地 dev 构建）只警告一次，之后静默跳过。
 		versionWarned.Do(func() {
-			log.Printf("WARNING: cannot parse current version %q (%v); automatic updates are disabled", CurrentVersion, err)
+			pkg_flags.LogStatusf("WARNING: cannot parse current version %q (%v); automatic updates are disabled", CurrentVersion, err)
 		})
 		return nil
 	}

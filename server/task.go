@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
 	"github.com/komari-monitor/komari-agent/ws"
@@ -34,7 +35,7 @@ func NewTask(task_id, command string) {
 		uploadTaskResult(task_id, "Remote control is disabled.", -1, time.Now())
 		return
 	}
-	log.Printf("Executing task %s with command: %s", task_id, command)
+	pkg_flags.LogStatusf("Executing task %s with command: %s", task_id, command)
 	result, exitCode := runTaskCommand(command)
 	uploadTaskResult(task_id, result, exitCode, time.Now())
 }

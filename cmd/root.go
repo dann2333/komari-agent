@@ -52,6 +52,9 @@ var RootCmd = &cobra.Command{
 			}
 		}
 		applyProcessName(effectiveProcessName())
+		if compiledQuiet == "0" {
+			flags.ShowBanner = true
+		}
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
@@ -117,10 +120,9 @@ var RootCmd = &cobra.Command{
 		// 设置 DNS 解析行为
 		if flags.CustomDNS != "" {
 			dnsresolver.SetCustomDNSServer(flags.CustomDNS)
-			log.Printf("Using custom DNS server: %s", flags.CustomDNS)
+			pkg_flags.LogStatusf("Using custom DNS server: %s", flags.CustomDNS)
 		} else {
-			// 未设置则使用系统默认 DNS（不使用内置列表）
-			log.Printf("Using system default DNS resolver")
+			pkg_flags.LogStatusf("Using system default DNS resolver")
 		}
 
 		// Auto discovery
@@ -140,12 +142,12 @@ var RootCmd = &cobra.Command{
 		if err != nil {
 			log.Println("Failed to get disk list:", err)
 		}
-		log.Println("Monitoring Mountpoints:", diskList)
+		pkg_flags.LogStatusf("Monitoring Mountpoints: %v", diskList)
 		interfaceList, err := monitoring.InterfaceList()
 		if err != nil {
 			log.Println("Failed to get interface list:", err)
 		}
-		log.Println("Monitoring Interfaces:", interfaceList)
+		pkg_flags.LogStatusf("Monitoring Interfaces: %v", interfaceList)
 
 		// 忽略不安全的证书
 		if flags.IgnoreUnsafeCert {

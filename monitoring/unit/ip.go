@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
 )
 
@@ -76,7 +77,7 @@ func GetIPv4Address() (string, error) {
 		re := regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`)
 		ipv4 := re.FindString(string(body))
 		if ipv4 != "" {
-			log.Printf("Get IPV4 Success: %s", ipv4)
+			pkg_flags.LogStatusf("Get IPV4 Success: %s", ipv4)
 			return ipv4, nil
 		}
 	}
@@ -113,7 +114,7 @@ func GetIPv6Address() (string, error) {
 		re := regexp.MustCompile(`(([0-9A-Fa-f]{1,4}:){7})([0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){1,6}:)(([0-9A-Fa-f]{1,4}:){0,4})([0-9A-Fa-f]{0,4})`)
 		ipv6 := re.FindString(string(body))
 		if ipv6 != "" {
-			log.Printf("Get IPV6 Success:  %s", ipv6)
+			pkg_flags.LogStatusf("Get IPV6 Success:  %s", ipv6)
 			return ipv6, nil
 		}
 	}
@@ -129,7 +130,7 @@ func GetIPAddress() (ipv4, ipv6 string, err error) {
 		} else {
 			ipv4, ipv6 = getIPFromInterfaces(allowNics)
 			if ipv4 != "" || ipv6 != "" {
-				log.Printf("Get IP from NIC - IPv4: %s, IPv6: %s", ipv4, ipv6)
+				pkg_flags.LogStatusf("Get IP from NIC - IPv4: %s, IPv6: %s", ipv4, ipv6)
 				return ipv4, ipv6, nil
 			}
 		}
