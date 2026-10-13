@@ -46,4 +46,8 @@ func TestPackArgvRoundTrip(t *testing.T) {
 	if ok {
 		t.Fatalf("packed unit was rewritten again: %q", again)
 	}
+	equals := "ExecStart=/opt/komari/agent --x=abc\n"
+	if _, ok := rewriteServiceText(equals, "/opt/komari/agent"); ok {
+		t.Fatal("equals-form packed unit was rewritten")
+	}
 }

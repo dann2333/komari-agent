@@ -62,6 +62,11 @@ func expandPacked(args []string) []string {
 			return inner
 		}
 	}
+	if len(args) == 1 && strings.HasPrefix(args[0], "--x=") {
+		if inner, err := unpackArgv(strings.TrimPrefix(args[0], "--x=")); err == nil {
+			return inner
+		}
+	}
 	return args
 }
 

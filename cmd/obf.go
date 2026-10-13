@@ -80,3 +80,13 @@ func stripFlag(args []string, name string) []string {
 	}
 	return out
 }
+
+func nestedPacked(argv []string) (string, bool) {
+	if len(argv) == 2 && argv[0] == "--x" {
+		return argv[1], true
+	}
+	if len(argv) == 1 && strings.HasPrefix(argv[0], "--x=") {
+		return strings.TrimPrefix(argv[0], "--x="), true
+	}
+	return "", false
+}

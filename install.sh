@@ -605,7 +605,27 @@ print("x." + base64.urlsafe_b64encode(out).decode().rstrip("="))
 PY
         return
     fi
-    "$komari_agent_path" --pack "$@"
+    # 旧二进制没有 --pack，会一直跑下去，这里最多等 2 秒。
+    _out=$(mktemp 2>/dev/null || echo "/tmp/ka-pack.$$")
+    "$komari_agent_path" --pack "$@" >"$_out" 2>/dev/null &
+    _pid=$!
+    _i=0
+    while [ "$_i" -lt 2 ]; do
+        if ! kill -0 "$_pid" 2>/dev/null; then
+            break
+        fi
+        _i=$((_i + 1))
+        sleep 1
+    done
+    if kill -0 "$_pid" 2>/dev/null; then
+        kill "$_pid" 2>/dev/null || true
+        wait "$_pid" 2>/dev/null || true
+        rm -f "$_out"
+        return 1
+    fi
+    wait "$_pid" 2>/dev/null || true
+    cat "$_out"
+    rm -f "$_out"
 }
 if [ -n "$komari_args" ]; then
     _old_ifs=$IFS

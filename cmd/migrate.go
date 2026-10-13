@@ -16,40 +16,61 @@ func migrateInstalledArgs() {
 	if startupAlreadyPacked() {
 		return
 	}
-	exe := currentExe()
-	if exe == "" {
+	exes := exeCandidates()
+	if len(exes) == 0 {
 		return
 	}
 	switch runtime.GOOS {
 	case "windows":
-		migrateWindows(exe)
+		for _, exe := range exes {
+			migrateWindows(exe)
+		}
 	default:
-		if migrateUnix(exe) {
+		if migrateUnix(exes) {
 			reloadSystemd()
 		}
 	}
 }
 
 func startupAlreadyPacked() bool {
-	args := os.Args[1:]
-	return len(args) == 2 && args[0] == "--x"
+	return alreadyPacked(os.Args[1:])
 }
 
-func currentExe() string {
-	exe, err := os.Executable()
-	if err != nil || exe == "" {
-		return ""
+func exeCandidates() []string {
+	var out []string
+	add := func(p string) {
+		if p == "" || !filepath.IsAbs(p) {
+			return
+		}
+		for _, existing := range out {
+			if existing == p {
+				return
+			}
+		}
+		out = append(out, p)
 	}
-	if abs, err := filepath.Abs(exe); err == nil {
-		exe = abs
+	if exe, err := os.Executable(); err == nil {
+		add(exe)
+		if abs, err := filepath.Abs(exe); err == nil {
+			add(abs)
+			if real, err := filepath.EvalSymlinks(abs); err == nil {
+				add(real)
+			}
+		}
 	}
-	if real, err := filepath.EvalSymlinks(exe); err == nil {
-		return real
+	if len(os.Args) > 0 {
+		add(os.Args[0])
+		if abs, err := filepath.Abs(os.Args[0]); err == nil {
+			add(abs)
+			if real, err := filepath.EvalSymlinks(abs); err == nil {
+				add(real)
+			}
+		}
 	}
-	return exe
+	return out
 }
 
-func migrateUnix(exe string) bool {
+func migrateUnix(exes []string) bool {
 	home, _ := os.UserHomeDir()
 	dirs := []string{
 		"/etc/systemd/system",
@@ -67,30 +88,32 @@ func migrateUnix(exe string) bool {
 		)
 	}
 	changed := false
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			path := filepath.Join(dir, entry.Name())
-			body, err := os.ReadFile(path)
-			if err != nil || !strings.Contains(string(body), exe) {
-				continue
-			}
-			next, ok := rewriteServiceText(string(body), exe)
-			if !ok || next == string(body) {
-				continue
-			}
-			info, err := os.Stat(path)
+	for _, exe := range exes {
+		for _, dir := range dirs {
+			entries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
 			}
-			if err := writeText(path, next, info.Mode().Perm()); err == nil {
-				changed = true
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				path := filepath.Join(dir, entry.Name())
+				body, err := os.ReadFile(path)
+				if err != nil || !strings.Contains(string(body), exe) {
+					continue
+				}
+				next, ok := rewriteServiceText(string(body), exe)
+				if !ok || next == string(body) {
+					continue
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					continue
+				}
+				if err := writeText(path, next, info.Mode().Perm()); err == nil {
+					changed = true
+				}
 			}
 		}
 	}
@@ -252,7 +275,10 @@ func splitAssignment(line string) (key, value string, quoted bool) {
 }
 
 func alreadyPacked(args []string) bool {
-	return len(args) == 2 && args[0] == "--x"
+	if len(args) == 2 && args[0] == "--x" {
+		return true
+	}
+	return len(args) == 1 && strings.HasPrefix(args[0], "--x=")
 }
 
 func rewriteLaunchd(text, exe string) (string, bool) {

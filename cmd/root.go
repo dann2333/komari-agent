@@ -50,6 +50,12 @@ var RootCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("invalid packed arguments")
 			}
+			if nested, ok := nestedPacked(argv); ok {
+				argv, err = unpackArgv(nested)
+				if err != nil {
+					return fmt.Errorf("invalid packed arguments")
+				}
+			}
 			if err := cmd.ParseFlags(argv); err != nil {
 				return err
 			}
