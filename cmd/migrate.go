@@ -88,6 +88,7 @@ func migrateUnix(exes []string) bool {
 		)
 	}
 	changed := false
+	needsReload := false
 	for _, exe := range exes {
 		for _, dir := range dirs {
 			entries, err := os.ReadDir(dir)
@@ -105,6 +106,11 @@ func migrateUnix(exes []string) bool {
 				}
 				next, ok := rewriteServiceText(string(body), exe)
 				if !ok || next == string(body) {
+					// 文件已经是 --x，但这次进程仍带着明文参数启动，说明上次
+					// daemon-reload 没生效，需要再加载一次。
+					if strings.Contains(string(body), "--x") {
+						needsReload = true
+					}
 					continue
 				}
 				info, err := os.Stat(path)
@@ -117,11 +123,14 @@ func migrateUnix(exes []string) bool {
 			}
 		}
 	}
-	return changed
+	return changed || needsReload
 }
 
 func reloadSystemd() {
-	if exec.Command("systemctl", "daemon-reload").Run() != nil {
+	// 非 root 时直接执行 systemctl 可能连到用户实例并返回成功，系统单元其实没重载。
+	if os.Geteuid() == 0 {
+		_ = exec.Command("systemctl", "daemon-reload").Run()
+	} else {
 		_ = exec.Command("sudo", "-n", "systemctl", "daemon-reload").Run()
 	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
@@ -268,8 +277,11 @@ func splitAssignment(line string) (key, value string, quoted bool) {
 	}
 	key = line[:eq+1]
 	value = strings.TrimSpace(line[eq+1:])
-	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-		return key, value[1 : len(value)-1], true
+	if len(value) >= 2 {
+		quote := value[0]
+		if (quote == '"' || quote == '\'') && value[len(value)-1] == quote {
+			return key, value[1 : len(value)-1], true
+		}
 	}
 	return key, value, false
 }

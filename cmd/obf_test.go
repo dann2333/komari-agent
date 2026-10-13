@@ -50,4 +50,9 @@ func TestPackArgvRoundTrip(t *testing.T) {
 	if _, ok := rewriteServiceText(equals, "/opt/komari/agent"); ok {
 		t.Fatal("equals-form packed unit was rewritten")
 	}
+	procd := "PROG=\"/opt/komari/agent\"\nARGS='-e https://example.com -t hunter2'\n"
+	pnext, ok := rewriteServiceText(procd, "/opt/komari/agent")
+	if !ok || strings.Contains(pnext, "https://example.com") || !strings.Contains(pnext, "ARGS=\"--x x.") {
+		t.Fatalf("single-quoted args = %q", pnext)
+	}
 }
