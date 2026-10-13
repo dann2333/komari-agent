@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -514,7 +513,7 @@ func downloadAsset(client *http.Client, owner, repo string, asset githubReleaseA
 // 老资产可能没有 digest，此时只告警并放行；digest 存在但不匹配则拒绝安装。
 func verifyAssetDigest(asset githubReleaseAsset, data []byte) error {
 	if asset.Digest == "" {
-		log.Printf("WARNING: release asset %s has no digest; skipping integrity check", asset.Name)
+		pkg_flags.LogStatusf("WARNING: release asset %s has no digest; skipping integrity check", asset.Name)
 		return nil
 	}
 	algorithm, want, found := strings.Cut(asset.Digest, ":")
@@ -591,7 +590,7 @@ func runScheduledCheck(check func() error, onRestartRequired func()) bool {
 		return true
 	}
 	if err != nil {
-		log.Println("[ERROR]", err)
+		pkg_flags.LogStatus("[ERROR]", err)
 	}
 	return false
 }

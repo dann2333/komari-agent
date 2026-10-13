@@ -130,7 +130,7 @@ func registerWithAutoDiscovery() error {
 	// 创建HTTP请求
 	req, err := http.NewRequest("POST", registerURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("failed to create register request: %v", err)
+		return fmt.Errorf("failed to create register request: %v", dropRequestURL(err))
 	}
 
 	// 设置请求头
