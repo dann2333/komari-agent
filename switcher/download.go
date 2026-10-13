@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 )
 
 // 连不上和连上了不给响应都要早点放弃 —— 后面还有十来个镜像等着试。
@@ -22,6 +24,7 @@ var transport = &http.Transport{
 	TLSHandshakeTimeout:   10 * time.Second,
 	ResponseHeaderTimeout: 15 * time.Second,
 	ExpectContinueTimeout: time.Second,
+	TLSClientConfig:       trustroots.Config(false),
 }
 
 // 下载途中卡住多久算这个镜像废了。整体不设上限: 慢但一直在传的线路

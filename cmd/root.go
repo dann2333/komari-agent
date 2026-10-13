@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 	"github.com/komari-monitor/komari-agent/monitoring/netstatic"
 	monitoring "github.com/komari-monitor/komari-agent/monitoring/unit"
 	"github.com/komari-monitor/komari-agent/server"
@@ -180,7 +180,7 @@ var RootCmd = &cobra.Command{
 
 		// 忽略不安全的证书
 		if flags.IgnoreUnsafeCert {
-			http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+			http.DefaultTransport.(*http.Transport).TLSClientConfig = trustroots.Config(true)
 		}
 		// 自动更新：后台立即检查一次并按周期复查，避免启动被 GitHub 访问阻塞
 		if !flags.DisableAutoUpdate {

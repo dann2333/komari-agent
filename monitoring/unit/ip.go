@@ -11,6 +11,7 @@ import (
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 )
 
 var (
@@ -26,6 +27,7 @@ var (
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig:       trustroots.Config(false),
 		},
 		Timeout: 15 * time.Second,
 	}
@@ -40,6 +42,7 @@ var (
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
+			TLSClientConfig:       trustroots.Config(false),
 		},
 		Timeout: 15 * time.Second,
 	}

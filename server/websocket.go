@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 	"github.com/komari-monitor/komari-agent/monitoring"
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
 	"github.com/komari-monitor/komari-agent/terminal"
@@ -530,9 +530,7 @@ func newWSDialer() *websocket.Dialer {
 		NetDialContext:    dnsresolver.GetDialContextWithPreference(15*time.Second, flags.PreferIPVersion),
 		Proxy:             http.ProxyFromEnvironment,
 		EnableCompression: !flags.DisableCompression,
-	}
-	if flags.IgnoreUnsafeCert {
-		d.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		TLSClientConfig:   trustroots.Config(flags.IgnoreUnsafeCert),
 	}
 	return d
 }

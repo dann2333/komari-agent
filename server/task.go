@@ -19,6 +19,7 @@ import (
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
 	"github.com/komari-monitor/komari-agent/ws"
 	ping "github.com/prometheus-community/pro-bing"
@@ -217,6 +218,7 @@ func httpPing(target string, timeout time.Duration) (int64, error) {
 
 	transport := &http.Transport{
 		DisableKeepAlives: true,
+		TLSClientConfig:   trustroots.Config(flags.IgnoreUnsafeCert),
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			// 在 Dial 之前解析 IP，排除 DNS 时间
 			host, port, err := net.SplitHostPort(addr)

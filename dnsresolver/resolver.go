@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	"github.com/komari-monitor/komari-agent/internal/trustroots"
 )
 
 var flags = pkg_flags.GlobalConfig
@@ -205,10 +206,8 @@ func getHTTPClient(timeout time.Duration, preferIPVersion string, forceHTTP2 boo
 		return client
 	}
 	client := &http.Client{
-		Transport: buildTransportWithPreferenceAndHTTP2(timeout, &tls.Config{
-			InsecureSkipVerify: flags.IgnoreUnsafeCert,
-		}, preferIPVersion, forceHTTP2),
-		Timeout: timeout,
+		Transport: buildTransportWithPreferenceAndHTTP2(timeout, trustroots.Config(flags.IgnoreUnsafeCert), preferIPVersion, forceHTTP2),
+		Timeout:   timeout,
 	}
 	httpClients[key] = client
 	return client
