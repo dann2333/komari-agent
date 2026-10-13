@@ -235,7 +235,7 @@ func readMOTD(path string) (motdFile, error) {
 }
 
 func writeMOTD(file motdFile, data []byte) error {
-	temp, err := os.CreateTemp(filepath.Dir(file.target), ".komari-motd-*")
+	temp, err := os.CreateTemp(filepath.Dir(file.target), ".motd-*")
 	if err != nil {
 		return err
 	}

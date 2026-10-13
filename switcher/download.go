@@ -102,7 +102,7 @@ func newRequest(url string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "komari-switch")
+	req.Header.Set("User-Agent", "curl/8.0.1")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	return req, nil
 }

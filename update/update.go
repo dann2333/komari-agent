@@ -395,7 +395,7 @@ func listGitHubReleases(owner, repo string) ([]githubRelease, error) {
 		}
 
 		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("User-Agent", "komari-agent")
+		req.Header.Set("User-Agent", "curl/8.0.1")
 		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -467,7 +467,7 @@ func openAssetStream(client *http.Client, owner, repo string, asset githubReleas
 	if err != nil {
 		return nil, fmt.Errorf("failed to create asset download request: %w", err)
 	}
-	req.Header.Set("User-Agent", "komari-agent")
+	req.Header.Set("User-Agent", "curl/8.0.1")
 	if token != "" {
 		// 重定向到对象存储时 Go 会自动剥离 Authorization 头，令牌不会外泄。
 		req.Header.Set("Accept", "application/octet-stream")

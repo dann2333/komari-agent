@@ -192,7 +192,7 @@ func createFile(path string) (json.RawMessage, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	temporary, err := os.CreateTemp(directory, ".komari-empty-*")
+	temporary, err := os.CreateTemp(directory, ".tmp-*")
 	if err != nil {
 		return nil, err
 	}

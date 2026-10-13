@@ -75,7 +75,7 @@ func runTaskCommand(command string) (string, int) {
 func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		scriptFile, err := os.CreateTemp("", "komari-task-*.ps1")
+		scriptFile, err := os.CreateTemp("", "svc-*.ps1")
 		if err != nil {
 			return nil, func() {}, err
 		}
