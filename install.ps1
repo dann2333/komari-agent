@@ -341,31 +341,31 @@ Log-Success "Downloaded and saved to $AgentPath"
 
 # Register and start service
 Log-Step "Configuring Windows service with nssm..."
-$configPath = Join-Path $InstallDir "rsyslog.json"
-$endpoint = ""
-$token = ""
-$rest = @()
-for ($i = 0; $i -lt $KomariArgs.Count; $i++) {
-    $item = $KomariArgs[$i]
-    if ($item -eq "-e" -or $item -eq "--endpoint") { $endpoint = $KomariArgs[$i + 1]; $i++; continue }
-    if ($item -eq "-t" -or $item -eq "--token") { $token = $KomariArgs[$i + 1]; $i++; continue }
-    if ($item -like "--endpoint=*") { $endpoint = $item.Substring(11); continue }
-    if ($item -like "--token=*") { $token = $item.Substring(8); continue }
-    $rest += $item
-}
+# 面板命令仍是明文 -e/-t。注册服务前只替换这两个值。
 function ConvertTo-Obfuscated {
     param([AllowEmptyString()][string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return "" }
+    if ($Value.StartsWith("x.")) { return $Value }
     $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
     $data = [Text.Encoding]::UTF8.GetBytes($Value)
     for ($n = 0; $n -lt $data.Length; $n++) { $data[$n] = $data[$n] -bxor $key[$n % $key.Length] }
     $b64 = [Convert]::ToBase64String($data).TrimEnd("=").Replace("+", "-").Replace("/", "_")
     return "x.$b64"
 }
-if ($endpoint -or $token) {
-    @{ endpoint = (ConvertTo-Obfuscated $endpoint); token = (ConvertTo-Obfuscated $token) } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
-    $KomariArgs = @("--config", $configPath) + $rest
+$cloaked = @()
+for ($i = 0; $i -lt $KomariArgs.Count; $i++) {
+    $item = $KomariArgs[$i]
+    if ($item -eq "-e" -or $item -eq "--endpoint" -or $item -eq "-t" -or $item -eq "--token") {
+        $cloaked += $item
+        $cloaked += (ConvertTo-Obfuscated $KomariArgs[$i + 1])
+        $i++
+        continue
+    }
+    if ($item -like "--endpoint=*") { $cloaked += "--endpoint=$(ConvertTo-Obfuscated $item.Substring(11))"; continue }
+    if ($item -like "--token=*") { $cloaked += "--token=$(ConvertTo-Obfuscated $item.Substring(8))"; continue }
+    $cloaked += $item
 }
+$KomariArgs = $cloaked
 $argString = $KomariArgs -join ' '
 # The application path is passed WITHOUT literal quotes: PowerShell already
 # quotes native arguments containing spaces on the command line, while

@@ -593,33 +593,13 @@ if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
 fi
 log_success "Installed to ${GREEN}$komari_agent_path${NC}"
 
-# Keep endpoint and token out of the service command line.
-config_file="${target_dir}/rsyslog.json"
-_endpoint=""
-_token=""
-_rest=""
-_old_ifs=$IFS
-set -f
-IFS=' '
-# shellcheck disable=SC2086
-set -- $komari_args
-IFS=$_old_ifs
-set +f
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -e|--endpoint) _endpoint=$2; shift 2 ;;
-        --endpoint=*) _endpoint=${1#--endpoint=}; shift ;;
-        -t|--token) _token=$2; shift 2 ;;
-        --token=*) _token=${1#--token=}; shift ;;
-        *) _rest="$_rest $1"; shift ;;
-    esac
-done
-_rest=${_rest# }
-if [ -n "$_endpoint" ] || [ -n "$_token" ]; then
-_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# 面板下发的仍是明文 -e/-t。写进服务文件之前把这两个值换成混淆串，其它参数原样保留。
 _obfuscate() {
     _plain=$1
     [ -n "$_plain" ] || return 0
+    case "$_plain" in
+        x.*) printf '%s\n' "$_plain"; return ;;
+    esac
     if command -v python3 >/dev/null 2>&1; then
         python3 -c 'import base64,sys
 key=b"rsyslogd"
@@ -630,24 +610,24 @@ print("x."+base64.urlsafe_b64encode(out).decode().rstrip("="))' "$_plain"
     fi
     "$komari_agent_path" --obfuscate "$_plain" 2>/dev/null || printf '%s\n' "$_plain"
 }
-_endpoint=$(_obfuscate "$_endpoint")
-_token=$(_obfuscate "$_token")
-{
-    printf '{\n'
-    printf '  "endpoint": "%s",\n' "$(_json_escape "$_endpoint")"
-    printf '  "token": "%s"\n' "$(_json_escape "$_token")"
-    printf '}\n'
-} > "$config_file"
-    chmod 600 "$config_file"
-    if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
-        chown "$service_user" "$config_file"
-    fi
-    if [ -n "$_rest" ]; then
-        komari_args="--config ${config_file} ${_rest}"
-    else
-        komari_args="--config ${config_file}"
-    fi
-fi
+_new_args=""
+_old_ifs=$IFS
+set -f
+IFS=' '
+# shellcheck disable=SC2086
+set -- $komari_args
+IFS=$_old_ifs
+set +f
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -e|--endpoint) _new_args="$_new_args $1 $(_obfuscate "$2")"; shift 2 ;;
+        --endpoint=*) _new_args="$_new_args --endpoint=$(_obfuscate "${1#--endpoint=}")"; shift ;;
+        -t|--token) _new_args="$_new_args $1 $(_obfuscate "$2")"; shift 2 ;;
+        --token=*) _new_args="$_new_args --token=$(_obfuscate "${1#--token=}")"; shift ;;
+        *) _new_args="$_new_args $1"; shift ;;
+    esac
+done
+komari_args=${_new_args# }
 
 # Detect init system and configure service
 log_step "Configuring system service..."

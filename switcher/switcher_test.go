@@ -87,7 +87,7 @@ func TestParseAndWriteSystemdUnit(t *testing.T) {
 	}
 	out, _ := os.ReadFile(unit)
 	got := string(out)
-	if !strings.Contains(got, "ExecStart=-/opt/komari/agent -e https://a.b -t tok --disable-security-warning") {
+	if strings.Contains(got, "https://a.b") || strings.Contains(got, " tok") || !strings.Contains(got, "-e x.") || !strings.Contains(got, "--disable-security-warning") {
 		t.Fatalf("ExecStart not rewritten as expected:\n%s", got)
 	}
 	// 其它行必须原样留着
@@ -116,7 +116,7 @@ func TestParseAndWriteProcdScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(init)
-	if !strings.Contains(string(out), "ARGS=\"-e https://a.b\"") {
+	if strings.Contains(string(out), "https://a.b") || !strings.Contains(string(out), "ARGS=\"-e x.") {
 		t.Fatalf("ARGS not rewritten:\n%s", out)
 	}
 	// 服务脚本得保持可执行, 否则回滚之后 init 起不来

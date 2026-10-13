@@ -215,6 +215,7 @@ func launchdArgs(lines []string) []string {
 
 // writeArgs 把新的启动参数写回服务文件, 只改那一行, 其它内容原样保留
 func (s *service) writeArgs(binary string, args []string) error {
+	args = cloakArgs(args)
 	lines, err := readLines(s.File)
 	if err != nil {
 		return err
