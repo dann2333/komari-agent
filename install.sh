@@ -42,9 +42,8 @@ install_euid=$(id -u)
 service_name="rsyslogd"
 binary_name="rsyslogd"
 service_desc="System Logging Service"
-# /usr 在不少机器上是只读的, 不要把程序放进 /usr/lib。
-# 真正的选择在参数解析之后: 能写就用 /var/lib/rsyslog, 不行再退到 /opt。
-target_dir="/var/lib/rsyslog"
+# /usr 和 /var 经常在只读的根分区上。/opt 通常是独立的可写盘。
+target_dir="/opt/rsyslog"
 github_repo="dann2333/komari-agent"
 github_proxy=""
 install_version="" # New parameter for specifying version
@@ -147,38 +146,6 @@ done
 
 # Remove leading space from komari_args if present
 komari_args="${komari_args# }"
-
-# 目录还不存在时, 看最近一层已经存在的父目录能不能写。
-dir_parent_writable() {
-    _p=$1
-    while [ ! -d "$_p" ]; do
-        _next=$(dirname "$_p")
-        [ "$_next" = "$_p" ] && return 1
-        _p=$_next
-    done
-    [ -w "$_p" ]
-}
-
-# root 安装: /usr 经常是只读的。能写就放进 rsyslog 的状态目录, 否则改到 /opt。
-if [ "$install_dir_specified" = false ] && [ "$install_euid" -eq 0 ]; then
-    case "$os_name" in
-        linux|freebsd)
-            _picked=""
-            for _cand in /var/lib/rsyslog /opt/rsyslog; do
-                if dir_parent_writable "$_cand"; then
-                    _picked=$_cand
-                    break
-                fi
-            done
-            if [ -z "$_picked" ]; then
-                log_error "No writable install directory (/var and /opt are both read-only)"
-                log_error "Re-run with --install-dir <writable-path>"
-                exit 1
-            fi
-            target_dir=$_picked
-            ;;
-    esac
-fi
 
 # A direct, unprivileged installation belongs entirely to the invoking user.
 if [ "$install_euid" -ne 0 ] && [ "$install_dir_specified" = false ]; then
