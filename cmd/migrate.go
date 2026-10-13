@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,9 @@ import (
 // start carries every flag inside a single --x value. Plaintext flags and
 // the previous per-flag obfuscation are both folded in.
 func migrateInstalledArgs() {
+	if startupAlreadyPacked() {
+		return
+	}
 	exe := currentExe()
 	if exe == "" {
 		return
@@ -24,6 +28,11 @@ func migrateInstalledArgs() {
 			reloadSystemd()
 		}
 	}
+}
+
+func startupAlreadyPacked() bool {
+	args := os.Args[1:]
+	return len(args) == 2 && args[0] == "--x"
 }
 
 func currentExe() string {
@@ -80,7 +89,7 @@ func migrateUnix(exe string) bool {
 			if err != nil {
 				continue
 			}
-			if err := os.WriteFile(path, []byte(next), info.Mode().Perm()); err == nil {
+			if err := writeText(path, next, info.Mode().Perm()); err == nil {
 				changed = true
 			}
 		}
@@ -89,8 +98,24 @@ func migrateUnix(exe string) bool {
 }
 
 func reloadSystemd() {
-	_ = exec.Command("systemctl", "daemon-reload").Run()
+	if exec.Command("systemctl", "daemon-reload").Run() != nil {
+		_ = exec.Command("sudo", "-n", "systemctl", "daemon-reload").Run()
+	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+}
+
+func writeText(path, text string, mode os.FileMode) error {
+	if err := os.WriteFile(path, []byte(text), mode); err == nil {
+		return nil
+	}
+	cmd := exec.Command("sudo", "-n", "tee", path)
+	cmd.Stdin = strings.NewReader(text)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func rewriteServiceText(text, exe string) (string, bool) {
@@ -127,36 +152,77 @@ func rewriteServiceText(text, exe string) (string, bool) {
 }
 
 func commandMatchesExe(text, exe string) bool {
-	for _, key := range []string{"command=", "PROG="} {
-		if strings.Contains(text, key+"\""+exe+"\"") || strings.Contains(text, key+exe) {
-			return true
+	for _, line := range strings.Split(text, "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "command=") || strings.HasPrefix(trim, "PROG=") {
+			if _, ok := pathIndex(trim, exe); ok {
+				return true
+			}
 		}
 	}
 	return false
 }
 
 func rewriteExecStart(line, exe string) (string, bool) {
-	idx := strings.Index(line, exe)
-	if idx < 0 {
+	idx, ok := pathIndex(line, exe)
+	if !ok {
 		return line, false
 	}
-	args := splitServiceArgs(strings.TrimSpace(line[idx+len(exe):]))
+	head := line[:idx+len(exe)]
+	rest := line[idx+len(exe):]
+	if strings.HasPrefix(rest, "\"") {
+		head += "\""
+		rest = rest[1:]
+	}
+	args := splitServiceArgs(strings.TrimSpace(rest))
 	if alreadyPacked(args) {
 		return line, false
 	}
-	return line[:idx] + exe + " --x " + packArgv(args), true
+	return head + " --x " + packArgv(args), true
 }
 
 func rewriteUpstart(line, exe string) (string, bool) {
-	idx := strings.Index(line, exe)
-	if idx < 0 {
-		return line, false
+	return rewriteExecStart(line, exe)
+}
+
+func pathIndex(line, exe string) (int, bool) {
+	if exe == "" {
+		return 0, false
 	}
-	args := splitServiceArgs(strings.TrimSpace(line[idx+len(exe):]))
-	if alreadyPacked(args) {
-		return line, false
+	start := 0
+	for start < len(line) {
+		idx := strings.Index(line[start:], exe)
+		if idx < 0 {
+			return 0, false
+		}
+		idx += start
+		after := idx + len(exe)
+		beforeOK := idx == 0 || isBeforeBoundary(line[idx-1])
+		afterOK := after == len(line) || isAfterBoundary(line[after])
+		if beforeOK && afterOK {
+			return idx, true
+		}
+		start = idx + 1
 	}
-	return line[:idx] + exe + " --x " + packArgv(args), true
+	return 0, false
+}
+
+func isBeforeBoundary(b byte) bool {
+	switch b {
+	case ' ', '\t', '"', '\'', '=', '-', '@', '+', '!':
+		return true
+	default:
+		return false
+	}
+}
+
+func isAfterBoundary(b byte) bool {
+	switch b {
+	case ' ', '\t', '"', '\'':
+		return true
+	default:
+		return false
+	}
 }
 
 func rewriteArgAssignment(line string) (string, bool) {

@@ -33,6 +33,15 @@ func TestPackArgvRoundTrip(t *testing.T) {
 	if !ok || strings.Contains(next, "https://example.com") || !strings.Contains(next, "ExecStart=-/opt/komari/agent --x x.") {
 		t.Fatalf("migrated unit = %q ok=%v", next, ok)
 	}
+	quoted := "ExecStart=\"/opt/komari/agent\" -e https://example.com -t hunter2\n"
+	qnext, ok := rewriteServiceText(quoted, "/opt/komari/agent")
+	if !ok || !strings.Contains(qnext, "ExecStart=\"/opt/komari/agent\" --x x.") || strings.Contains(qnext, "https://example.com") {
+		t.Fatalf("quoted unit = %q", qnext)
+	}
+	longer := "ExecStart=/opt/komari/agent-helper -e https://example.com\n"
+	if _, ok := rewriteServiceText(longer, "/opt/komari/agent"); ok {
+		t.Fatal("prefix path was rewritten")
+	}
 	again, ok := rewriteServiceText(next, "/opt/komari/agent")
 	if ok {
 		t.Fatalf("packed unit was rewritten again: %q", again)

@@ -615,7 +615,14 @@ if [ -n "$komari_args" ]; then
     set -- $komari_args
     IFS=$_old_ifs
     set +f
-    komari_args="--x $(_pack_args "$@")"
+    _blob=$(_pack_args "$@") || _blob=""
+    case "$_blob" in
+        x.*) komari_args="--x ${_blob}" ;;
+        *)
+            log_error "Failed to pack startup arguments"
+            exit 1
+            ;;
+    esac
 fi
 
 # Detect init system and configure service

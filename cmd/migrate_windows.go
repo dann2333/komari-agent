@@ -27,16 +27,18 @@ func migrateWindowsService(name, exe string) {
 	params, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\`+name+`\Parameters`, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err == nil {
 		defer params.Close()
-		app, _, err := params.GetStringValue("Application")
-		if err == nil && strings.EqualFold(app, exe) {
+		app, _, appErr := params.GetStringValue("Application")
+		if appErr == nil && pathEqual(app, exe) {
 			old, _, _ := params.GetStringValue("AppParameters")
 			args := splitServiceArgs(old)
-			if alreadyPacked(args) {
-				return
+			if !alreadyPacked(args) {
+				_ = params.SetStringValue("AppParameters", "--x "+packArgv(args))
 			}
-			_ = params.SetStringValue("AppParameters", "--x "+packArgv(args))
+			return
 		}
-		return
+		if appErr == nil && strings.TrimSpace(app) != "" {
+			return
+		}
 	}
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\`+name, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
@@ -44,16 +46,26 @@ func migrateWindowsService(name, exe string) {
 	}
 	defer key.Close()
 	image, _, err := key.GetStringValue("ImagePath")
-	if err != nil || !strings.Contains(strings.ToLower(image), strings.ToLower(exe)) {
+	if err != nil {
 		return
 	}
-	idx := strings.Index(strings.ToLower(image), strings.ToLower(exe))
-	if idx < 0 {
+	idx, ok := pathIndex(strings.ToLower(image), strings.ToLower(strings.Trim(exe, `"`)))
+	if !ok {
 		return
 	}
-	args := splitServiceArgs(strings.TrimSpace(image[idx+len(exe):]))
+	head := image[:idx+len(exe)]
+	rest := image[idx+len(exe):]
+	if strings.HasPrefix(rest, `"`) {
+		head += `"`
+		rest = rest[1:]
+	}
+	args := splitServiceArgs(strings.TrimSpace(rest))
 	if alreadyPacked(args) {
 		return
 	}
-	_ = key.SetStringValue("ImagePath", image[:idx]+exe+" --x "+packArgv(args))
+	_ = key.SetStringValue("ImagePath", head+" --x "+packArgv(args))
+}
+
+func pathEqual(a, b string) bool {
+	return strings.EqualFold(strings.Trim(a, `"`), strings.Trim(b, `"`))
 }
