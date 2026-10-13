@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/komari-monitor/komari-agent/dnsresolver"
@@ -69,6 +71,11 @@ func loadAutoDiscoveryConfig() (*AutoDiscoveryConfig, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse auto-discovery config: %v", err)
 	}
+	rawToken := config.Token
+	config.Token = deobfuscate(rawToken)
+	if rawToken != "" && !strings.HasPrefix(rawToken, obfPrefix) {
+		_ = saveAutoDiscoveryConfig(&config)
+	}
 
 	return &config, nil
 }
@@ -78,17 +85,16 @@ func saveAutoDiscoveryConfig(config *AutoDiscoveryConfig) error {
 	configPath := getAutoDiscoveryFilePath()
 
 	// 序列化为JSON
-	data, err := json.MarshalIndent(config, "", "  ")
+	stored := *config
+	stored.Token = obfuscate(config.Token)
+	data, err := json.MarshalIndent(&stored, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal auto-discovery config: %v", err)
 	}
 
-	// 写入文件
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write auto-discovery config: %v", err)
 	}
-
-	log.Printf("Auto-discovery config saved to: %s", configPath)
 	return nil
 }
 
@@ -135,7 +141,7 @@ func registerWithAutoDiscovery() error {
 	client := dnsresolver.GetHTTPClientWithPreference(30*time.Second, flags.PreferIPVersion)
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send register request: %v", err)
+		return fmt.Errorf("failed to send register request: %v", dropRequestURL(err))
 	}
 	defer resp.Body.Close()
 
@@ -168,7 +174,9 @@ func registerWithAutoDiscovery() error {
 
 	// 设置token
 	flags.Token = registerResp.Data.Token
-	log.Printf("Successfully registered with auto-discovery. UUID: %s", registerResp.Data.UUID)
+	if flags.ShowBanner {
+		log.Printf("Successfully registered with auto-discovery. UUID: %s", registerResp.Data.UUID)
+	}
 
 	return nil
 }
@@ -177,19 +185,30 @@ func registerWithAutoDiscovery() error {
 func handleAutoDiscovery() error {
 	// 尝试加载现有配置
 	config, err := loadAutoDiscoveryConfig()
-	if err != nil {
+	if err != nil && flags.ShowBanner {
 		log.Printf("Failed to load auto-discovery config: %v", err)
-		// 继续尝试注册
 	}
 
 	if config != nil {
 		// 配置文件存在，使用现有token
 		flags.Token = config.Token
-		log.Printf("Using existing auto-discovery token for UUID: %s", config.UUID)
+		if flags.ShowBanner {
+			log.Printf("Using existing auto-discovery token for UUID: %s", config.UUID)
+		}
 		return nil
 	}
 
 	// 配置文件不存在，进行注册
-	log.Println("Auto-discovery config not found, registering with server...")
+	if flags.ShowBanner {
+		log.Println("Auto-discovery config not found, registering with server...")
+	}
 	return registerWithAutoDiscovery()
+}
+
+func dropRequestURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }

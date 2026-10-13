@@ -345,7 +345,8 @@ Log-Step "Configuring Windows service with nssm..."
 function ConvertTo-PackedArgs {
     param([string[]]$Argv)
     $parts = foreach ($item in $Argv) {
-        '"' + (($item -replace '\\', '\\') -replace '"', '\"') + '"'
+        $escaped = $item.Replace('\', '\\').Replace('"', '\"')
+        '"' + $escaped + '"'
     }
     $json = '{"argv":[' + ($parts -join ',') + ']}'
     $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
@@ -356,12 +357,12 @@ function ConvertTo-PackedArgs {
 }
 if ($KomariArgs.Count -gt 0) {
     $KomariArgs = @("--x", (ConvertTo-PackedArgs $KomariArgs))
+    nssm install $ServiceName $AgentPath @KomariArgs
+}
+else {
+    nssm install $ServiceName $AgentPath
 }
 $argString = $KomariArgs -join ' '
-# The application path is passed WITHOUT literal quotes: PowerShell already
-# quotes native arguments containing spaces on the command line, while
-# embedded quotes made nssm store a broken Application path (komari-agent#118).
-nssm install $ServiceName $AgentPath $argString
 # Set display name and startup type using nssm
 nssm set $ServiceName DisplayName $ServiceDisplayName
 nssm set $ServiceName Start SERVICE_AUTO_START

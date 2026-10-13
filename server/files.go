@@ -814,7 +814,7 @@ func postFileResult(result v2.FileResult) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
-			log.Printf("failed to create file result request: %v", err)
+			log.Printf("failed to create file result request: %v", dropURL(err))
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -837,7 +837,7 @@ func postFileResult(result v2.FileResult) {
 			continue
 		}
 		if err != nil {
-			log.Printf("failed to return file result: %v", err)
+			log.Printf("failed to return file result: %v", dropURL(err))
 		} else if response != nil {
 			log.Printf("file result endpoint returned %s", response.Status)
 		}

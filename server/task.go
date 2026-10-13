@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -124,7 +125,7 @@ func uploadTaskResult(taskID, result string, exitCode int, finishedAt time.Time)
 		},
 	}
 	if err := postV2RPC(payload); err != nil {
-		log.Printf("Failed to upload task result: %v", err)
+		log.Printf("Failed to upload task result: %v", dropURL(err))
 	}
 }
 
@@ -315,7 +316,7 @@ func NewPingTask(conn *ws.SafeConn, taskID uint, pingType, pingTarget string) {
 	//}
 	if conn == nil {
 		if err := postV2RPC(wsPayload); err != nil {
-			log.Printf("Failed to upload ping result over POST: %v", err)
+			log.Printf("Failed to upload ping result over POST: %v", dropURL(err))
 		}
 		return
 	}
@@ -340,7 +341,7 @@ func postV2RPC(payload interface{}) error {
 	}
 	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return dropURL(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if compressed {
@@ -349,7 +350,7 @@ func postV2RPC(payload interface{}) error {
 	client := dnsresolver.GetHTTPClientWithPreference(30*time.Second, flags.PreferIPVersion)
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return dropURL(err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
@@ -365,6 +366,16 @@ func postV2RPC(payload interface{}) error {
 		}
 	}
 	return nil
+}
+
+// dropURL removes the request URL from net/http errors. Those strings include
+// the panel address and token, which otherwise land in the service log.
+func dropURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
+	}
+	return err
 }
 
 func gzipBytes(data []byte) ([]byte, error) {
