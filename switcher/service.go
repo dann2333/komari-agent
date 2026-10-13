@@ -166,7 +166,7 @@ func parseService(s *service) error {
 		return fmt.Errorf("无法从 %s 解析出启动命令", s.File)
 	}
 	s.Binary = tokens[0]
-	s.Args = tokens[1:]
+	s.Args = expandPacked(tokens[1:])
 	return nil
 }
 
@@ -215,7 +215,7 @@ func launchdArgs(lines []string) []string {
 
 // writeArgs 把新的启动参数写回服务文件, 只改那一行, 其它内容原样保留
 func (s *service) writeArgs(binary string, args []string) error {
-	args = cloakArgs(args)
+	args = packForService(args)
 	lines, err := readLines(s.File)
 	if err != nil {
 		return err

@@ -87,8 +87,14 @@ func TestParseAndWriteSystemdUnit(t *testing.T) {
 	}
 	out, _ := os.ReadFile(unit)
 	got := string(out)
-	if strings.Contains(got, "https://a.b") || strings.Contains(got, " tok") || !strings.Contains(got, "-e x.") || !strings.Contains(got, "--disable-security-warning") {
+	if strings.Contains(got, "https://a.b") || strings.Contains(got, " tok") || !strings.Contains(got, "ExecStart=-/opt/komari/agent --x x.") {
 		t.Fatalf("ExecStart not rewritten as expected:\n%s", got)
+	}
+	if err := parseService(svc); err != nil {
+		t.Fatal(err)
+	}
+	if flagValue(svc.Args, "-e") != "https://a.b" || flagValue(svc.Args, "-t") != "tok" || !hasFlag(svc.Args, "--disable-security-warning") {
+		t.Fatalf("unpacked args = %q", svc.Args)
 	}
 	// 其它行必须原样留着
 	for _, line := range []string{"Description=Komari Agent", "Restart=always", "WantedBy=multi-user.target"} {
@@ -116,7 +122,7 @@ func TestParseAndWriteProcdScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(init)
-	if strings.Contains(string(out), "https://a.b") || !strings.Contains(string(out), "ARGS=\"-e x.") {
+	if strings.Contains(string(out), "https://a.b") || !strings.Contains(string(out), `ARGS="--x x.`) {
 		t.Fatalf("ARGS not rewritten:\n%s", out)
 	}
 	// 服务脚本得保持可执行, 否则回滚之后 init 起不来
@@ -160,8 +166,14 @@ func TestParseAndWriteLaunchdPlist(t *testing.T) {
 	}
 	out, _ := os.ReadFile(plist)
 	got := string(out)
-	if !strings.Contains(got, "<string>--gpu</string>") || strings.Count(got, "<string>/opt/komari/agent</string>") != 1 {
+	if strings.Contains(got, "https://a.b") || !strings.Contains(got, "<string>--x</string>") || strings.Count(got, "<string>/opt/komari/agent</string>") != 1 {
 		t.Fatalf("plist rewritten wrong:\n%s", got)
+	}
+	if err := parseService(svc); err != nil {
+		t.Fatal(err)
+	}
+	if !hasFlag(svc.Args, "--gpu") || flagValue(svc.Args, "-e") != "https://a.b" {
+		t.Fatalf("unpacked plist args = %q", svc.Args)
 	}
 	if !strings.Contains(got, "<key>RunAtLoad</key>") {
 		t.Fatalf("unrelated keys disappeared:\n%s", got)

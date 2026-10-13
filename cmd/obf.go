@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"strings"
 )
@@ -43,4 +45,38 @@ func deobfuscateConfig() {
 			f.SetString(deobfuscate(f.String()))
 		}
 	}
+}
+
+type packedArgv struct {
+	Argv []string `json:"argv"`
+}
+
+func packArgv(argv []string) string {
+	if argv == nil {
+		argv = []string{}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(packedArgv{Argv: argv})
+	return obfuscate(strings.TrimRight(buf.String(), "\n"))
+}
+
+func unpackArgv(s string) ([]string, error) {
+	var packed packedArgv
+	if err := json.Unmarshal([]byte(deobfuscate(s)), &packed); err != nil {
+		return nil, err
+	}
+	return packed.Argv, nil
+}
+
+func stripFlag(args []string, name string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == name {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }

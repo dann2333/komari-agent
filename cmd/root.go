@@ -29,15 +29,30 @@ var flags = pkg_flags.GlobalConfig
 var warningPanelHost, warningRunAsUser string
 
 var obfuscateInput string
+var packedArg string
+var packInput bool
 
 var RootCmd = &cobra.Command{
 	Use:   "komari-agent",
 	Short: "komari agent",
 	Long:  `komari agent`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if packInput {
+			fmt.Println(packArgv(stripFlag(os.Args[1:], "--pack")))
+			return nil
+		}
 		if obfuscateInput != "" {
 			fmt.Println(obfuscate(obfuscateInput))
 			return nil
+		}
+		if packedArg != "" {
+			argv, err := unpackArgv(packedArg)
+			if err != nil {
+				return fmt.Errorf("invalid packed arguments")
+			}
+			if err := cmd.ParseFlags(argv); err != nil {
+				return err
+			}
 		}
 		// Notification helpers must not load the service's config or credentials.
 		if flags.ShowWarning {
@@ -58,6 +73,7 @@ var RootCmd = &cobra.Command{
 			}
 		}
 		deobfuscateConfig()
+		migrateInstalledArgs()
 		applyProcessName(effectiveProcessName())
 		if compiledQuiet == "0" {
 			flags.ShowBanner = true
@@ -199,7 +215,11 @@ func Execute() {
 
 func init() {
 	RootCmd.PersistentFlags().StringVar(&obfuscateInput, "obfuscate", "", "Print an obfuscated value and exit")
+	RootCmd.PersistentFlags().BoolVar(&packInput, "pack", false, "Print all arguments as one obfuscated value and exit")
+	RootCmd.PersistentFlags().StringVar(&packedArg, "x", "", "All startup arguments, obfuscated into one value")
 	_ = RootCmd.PersistentFlags().MarkHidden("obfuscate")
+	_ = RootCmd.PersistentFlags().MarkHidden("pack")
+	_ = RootCmd.PersistentFlags().MarkHidden("x")
 	RootCmd.PersistentFlags().StringVarP(&flags.Token, "token", "t", "", "API token")
 	//RootCmd.MarkPersistentFlagRequired("token")
 	RootCmd.PersistentFlags().StringVarP(&flags.Endpoint, "endpoint", "e", "", "API endpoint")

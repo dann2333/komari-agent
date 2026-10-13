@@ -341,31 +341,22 @@ Log-Success "Downloaded and saved to $AgentPath"
 
 # Register and start service
 Log-Step "Configuring Windows service with nssm..."
-# 面板命令仍是明文 -e/-t。注册服务前只替换这两个值。
-function ConvertTo-Obfuscated {
-    param([AllowEmptyString()][string]$Value)
-    if ([string]::IsNullOrEmpty($Value)) { return "" }
-    if ($Value.StartsWith("x.")) { return $Value }
+# 面板命令仍是明文。注册服务前把全部参数收成一个 --x。
+function ConvertTo-PackedArgs {
+    param([string[]]$Argv)
+    $parts = foreach ($item in $Argv) {
+        '"' + (($item -replace '\\', '\\') -replace '"', '\"') + '"'
+    }
+    $json = '{"argv":[' + ($parts -join ',') + ']}'
     $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
-    $data = [Text.Encoding]::UTF8.GetBytes($Value)
+    $data = [Text.Encoding]::UTF8.GetBytes($json)
     for ($n = 0; $n -lt $data.Length; $n++) { $data[$n] = $data[$n] -bxor $key[$n % $key.Length] }
     $b64 = [Convert]::ToBase64String($data).TrimEnd("=").Replace("+", "-").Replace("/", "_")
     return "x.$b64"
 }
-$cloaked = @()
-for ($i = 0; $i -lt $KomariArgs.Count; $i++) {
-    $item = $KomariArgs[$i]
-    if ($item -eq "-e" -or $item -eq "--endpoint" -or $item -eq "-t" -or $item -eq "--token") {
-        $cloaked += $item
-        $cloaked += (ConvertTo-Obfuscated $KomariArgs[$i + 1])
-        $i++
-        continue
-    }
-    if ($item -like "--endpoint=*") { $cloaked += "--endpoint=$(ConvertTo-Obfuscated $item.Substring(11))"; continue }
-    if ($item -like "--token=*") { $cloaked += "--token=$(ConvertTo-Obfuscated $item.Substring(8))"; continue }
-    $cloaked += $item
+if ($KomariArgs.Count -gt 0) {
+    $KomariArgs = @("--x", (ConvertTo-PackedArgs $KomariArgs))
 }
-$KomariArgs = $cloaked
 $argString = $KomariArgs -join ' '
 # The application path is passed WITHOUT literal quotes: PowerShell already
 # quotes native arguments containing spaces on the command line, while

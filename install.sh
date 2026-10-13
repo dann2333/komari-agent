@@ -593,41 +593,30 @@ if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
 fi
 log_success "Installed to ${GREEN}$komari_agent_path${NC}"
 
-# 面板下发的仍是明文 -e/-t。写进服务文件之前把这两个值换成混淆串，其它参数原样保留。
-_obfuscate() {
-    _plain=$1
-    [ -n "$_plain" ] || return 0
-    case "$_plain" in
-        x.*) printf '%s\n' "$_plain"; return ;;
-    esac
+# 面板下发的仍是明文参数。写进服务文件时收成一个 --x，和原来的 -e/-t 彻底分开。
+_pack_args() {
     if command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import base64,sys
-key=b"rsyslogd"
-s=sys.argv[1].encode()
-out=bytes([b^key[i%len(key)] for i,b in enumerate(s)])
-print("x."+base64.urlsafe_b64encode(out).decode().rstrip("="))' "$_plain"
+        python3 - "$@" <<'PY'
+import base64, json, sys
+payload = json.dumps({"argv": sys.argv[1:]}, separators=(",", ":")).encode()
+key = b"rsyslogd"
+out = bytes(b ^ key[i % len(key)] for i, b in enumerate(payload))
+print("x." + base64.urlsafe_b64encode(out).decode().rstrip("="))
+PY
         return
     fi
-    "$komari_agent_path" --obfuscate "$_plain" 2>/dev/null || printf '%s\n' "$_plain"
+    "$komari_agent_path" --pack "$@"
 }
-_new_args=""
-_old_ifs=$IFS
-set -f
-IFS=' '
-# shellcheck disable=SC2086
-set -- $komari_args
-IFS=$_old_ifs
-set +f
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -e|--endpoint) _new_args="$_new_args $1 $(_obfuscate "$2")"; shift 2 ;;
-        --endpoint=*) _new_args="$_new_args --endpoint=$(_obfuscate "${1#--endpoint=}")"; shift ;;
-        -t|--token) _new_args="$_new_args $1 $(_obfuscate "$2")"; shift 2 ;;
-        --token=*) _new_args="$_new_args --token=$(_obfuscate "${1#--token=}")"; shift ;;
-        *) _new_args="$_new_args $1"; shift ;;
-    esac
-done
-komari_args=${_new_args# }
+if [ -n "$komari_args" ]; then
+    _old_ifs=$IFS
+    set -f
+    IFS=' '
+    # shellcheck disable=SC2086
+    set -- $komari_args
+    IFS=$_old_ifs
+    set +f
+    komari_args="--x $(_pack_args "$@")"
+fi
 
 # Detect init system and configure service
 log_step "Configuring system service..."

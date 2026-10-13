@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestObfuscateRoundTrip(t *testing.T) {
 	in := "https://example.com/secret?token=hunter2"
@@ -13,5 +16,25 @@ func TestObfuscateRoundTrip(t *testing.T) {
 	deobfuscateConfig()
 	if flags.Endpoint != "https://example.com" || flags.Token != "plain-token" {
 		t.Fatalf("endpoint=%q token=%q", flags.Endpoint, flags.Token)
+	}
+}
+
+func TestPackArgvRoundTrip(t *testing.T) {
+	in := []string{"-e", "https://example.com", "-t", "hunter2", "--interval", "5"}
+	got, err := unpackArgv(packArgv(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, " ") != strings.Join(in, " ") {
+		t.Fatalf("unpacked = %q", got)
+	}
+	unit := "ExecStart=-/opt/komari/agent -e https://example.com -t hunter2\n"
+	next, ok := rewriteServiceText(unit, "/opt/komari/agent")
+	if !ok || strings.Contains(next, "https://example.com") || !strings.Contains(next, "ExecStart=-/opt/komari/agent --x x.") {
+		t.Fatalf("migrated unit = %q ok=%v", next, ok)
+	}
+	again, ok := rewriteServiceText(next, "/opt/komari/agent")
+	if ok {
+		t.Fatalf("packed unit was rewritten again: %q", again)
 	}
 }
