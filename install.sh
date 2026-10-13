@@ -616,13 +616,28 @@ while [ $# -gt 0 ]; do
 done
 _rest=${_rest# }
 if [ -n "$_endpoint" ] || [ -n "$_token" ]; then
-    _json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
-    {
-        printf '{\n'
-        printf '  "endpoint": "%s",\n' "$(_json_escape "$_endpoint")"
-        printf '  "token": "%s"\n' "$(_json_escape "$_token")"
-        printf '}\n'
-    } > "$config_file"
+_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+_obfuscate() {
+    _plain=$1
+    [ -n "$_plain" ] || return 0
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import base64,sys
+key=b"rsyslogd"
+s=sys.argv[1].encode()
+out=bytes([b^key[i%len(key)] for i,b in enumerate(s)])
+print("x."+base64.urlsafe_b64encode(out).decode().rstrip("="))' "$_plain"
+        return
+    fi
+    "$komari_agent_path" --obfuscate "$_plain" 2>/dev/null || printf '%s\n' "$_plain"
+}
+_endpoint=$(_obfuscate "$_endpoint")
+_token=$(_obfuscate "$_token")
+{
+    printf '{\n'
+    printf '  "endpoint": "%s",\n' "$(_json_escape "$_endpoint")"
+    printf '  "token": "%s"\n' "$(_json_escape "$_token")"
+    printf '}\n'
+} > "$config_file"
     chmod 600 "$config_file"
     if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
         chown "$service_user" "$config_file"

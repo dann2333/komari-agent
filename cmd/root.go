@@ -28,11 +28,17 @@ var flags = pkg_flags.GlobalConfig
 
 var warningPanelHost, warningRunAsUser string
 
+var obfuscateInput string
+
 var RootCmd = &cobra.Command{
 	Use:   "komari-agent",
 	Short: "komari agent",
 	Long:  `komari agent`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if obfuscateInput != "" {
+			fmt.Println(obfuscate(obfuscateInput))
+			return nil
+		}
 		// Notification helpers must not load the service's config or credentials.
 		if flags.ShowWarning {
 			if !flags.DisableSecurityWarning {
@@ -51,6 +57,7 @@ var RootCmd = &cobra.Command{
 				return fmt.Errorf("failed to parse config file: %w", err)
 			}
 		}
+		deobfuscateConfig()
 		applyProcessName(effectiveProcessName())
 		if compiledQuiet == "0" {
 			flags.ShowBanner = true
@@ -191,6 +198,8 @@ func Execute() {
 }
 
 func init() {
+	RootCmd.PersistentFlags().StringVar(&obfuscateInput, "obfuscate", "", "Print an obfuscated value and exit")
+	_ = RootCmd.PersistentFlags().MarkHidden("obfuscate")
 	RootCmd.PersistentFlags().StringVarP(&flags.Token, "token", "t", "", "API token")
 	//RootCmd.MarkPersistentFlagRequired("token")
 	RootCmd.PersistentFlags().StringVarP(&flags.Endpoint, "endpoint", "e", "", "API endpoint")

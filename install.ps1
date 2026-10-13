@@ -353,8 +353,17 @@ for ($i = 0; $i -lt $KomariArgs.Count; $i++) {
     if ($item -like "--token=*") { $token = $item.Substring(8); continue }
     $rest += $item
 }
+function ConvertTo-Obfuscated {
+    param([AllowEmptyString()][string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return "" }
+    $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
+    $data = [Text.Encoding]::UTF8.GetBytes($Value)
+    for ($n = 0; $n -lt $data.Length; $n++) { $data[$n] = $data[$n] -bxor $key[$n % $key.Length] }
+    $b64 = [Convert]::ToBase64String($data).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+    return "x.$b64"
+}
 if ($endpoint -or $token) {
-    @{ endpoint = $endpoint; token = $token } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
+    @{ endpoint = (ConvertTo-Obfuscated $endpoint); token = (ConvertTo-Obfuscated $token) } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
     $KomariArgs = @("--config", $configPath) + $rest
 }
 $argString = $KomariArgs -join ' '
