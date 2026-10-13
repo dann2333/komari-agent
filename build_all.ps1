@@ -15,10 +15,14 @@ $linuxOnlyArchList = @('loong64', 'riscv64', 's390x', 'ppc64', 'ppc64le', 'mips'
 $buildDir = Join-Path -Path (Get-Location) -ChildPath 'build'
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-# Detect version from git tags or fallback to dev
+# Source defaults are already red-team. QUIET=0 only re-enables the startup banner.
+# Runtime opt-out: --disable-process-mask --show-banner --disable-security-warning=false
 $version = (git describe --tags --abbrev=0 2>$null)
 if (-not $version) { $version = 'dev' }
 $version = $version.Trim()
+if ($null -eq $env:PROCESS_NAME) { $processName = 'rsyslogd' } else { $processName = $env:PROCESS_NAME }
+if ($env:QUIET) { $quiet = $env:QUIET } else { $quiet = '1' }
+$ldflags = "-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=$version -X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=$processName -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=$quiet"
 
 # Check go exists
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
@@ -48,7 +52,7 @@ foreach ($goos in $osList) {
         $env:GOARCH = $goarch
         $env:CGO_ENABLED = '0'
 
-        & go build -trimpath -ldflags "-X github.com/komari-monitor/komari-agent/update.CurrentVersion=$version" -o "$outPath"
+        & go build -trimpath -ldflags $ldflags -o "$outPath"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Failed to build for $goos/$goarch" -ForegroundColor $Red
             $failedBuilds += "$goos/$goarch"

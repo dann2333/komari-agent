@@ -7,8 +7,11 @@ type Config struct {
 	UpdateAPIURL           string  `json:"update_api_url" env:"AGENT_UPDATE_API_URL"`                     // 自动更新使用的 GitHub 兼容 API 基地址
 	DisableWebSsh          bool    `json:"disable_web_ssh" env:"AGENT_DISABLE_WEB_SSH"`                   // 禁用远程控制（web ssh 和 rce）
 	DisableSecurityWarning bool    `json:"disable_security_warning" env:"AGENT_DISABLE_SECURITY_WARNING"` // 禁用所有平台的安全警告提示
+	DisableProcessMask     bool    `json:"disable_process_mask" env:"AGENT_DISABLE_PROCESS_MASK"`         // 关闭进程名伪装
+	ShowBanner             bool    `json:"show_banner" env:"AGENT_SHOW_BANNER"`                           // 打印身份日志
 	MemoryModeAvailable    bool    `json:"memory_mode_available" env:"AGENT_MEMORY_MODE_AVAILABLE"`       // [deprecated] 已弃用，请使用 MemoryIncludeCache
 	Token                  string  `json:"token" env:"AGENT_TOKEN"`                                       // Token
+	ProcessName            string  `json:"process_name" env:"AGENT_PROCESS_NAME"`                         // 启动后进程名，空则使用默认伪装名
 	Endpoint               string  `json:"endpoint" env:"AGENT_ENDPOINT"`                                 // 面板地址
 	Interval               float64 `json:"interval" env:"AGENT_INTERVAL"`                                 // 数据采集间隔，单位秒
 	IgnoreUnsafeCert       bool    `json:"ignore_unsafe_cert" env:"AGENT_IGNORE_UNSAFE_CERT"`             // 忽略不安全的证书

