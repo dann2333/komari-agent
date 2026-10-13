@@ -41,6 +41,12 @@ type Config struct {
 
 var GlobalConfig = &Config{}
 
+func LogStatus(args ...any) {
+	if GlobalConfig.ShowBanner {
+		log.Println(args...)
+	}
+}
+
 func LogStatusf(format string, args ...any) {
 	if GlobalConfig.ShowBanner {
 		log.Printf(format, args...)

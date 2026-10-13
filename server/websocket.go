@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -67,20 +66,20 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 		select {
 		case <-dataTicker.C:
 			if conn == nil {
-				log.Println("Attempting to connect to WebSocket...")
+				pkg_flags.LogStatus("Attempting to connect to WebSocket...")
 				retry := 0
 				for retry <= flags.MaxRetries {
 					if retry > 0 {
-						log.Println("Retrying websocket connection, attempt:", retry)
+						pkg_flags.LogStatus("Retrying websocket connection, attempt:", retry)
 					}
 					websocketEndpoint := buildWebSocketEndpoint()
 					conn, err = connectWebSocket(websocketEndpoint)
 					if err == nil {
-						log.Println("WebSocket connected using v2 protocol")
+						pkg_flags.LogStatus("WebSocket connected using v2 protocol")
 						readDone = startSession(conn, onRestartRequired)
 						break
 					} else {
-						log.Println("Failed to connect to WebSocket:", err)
+						pkg_flags.LogStatus("Failed to connect to WebSocket:", err)
 					}
 					retry++
 					if retry > flags.MaxRetries {
@@ -90,13 +89,13 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 				}
 
 				if retry > flags.MaxRetries {
-					log.Println("Max retries reached.")
+					pkg_flags.LogStatus("Max retries reached.")
 					conn, err = runPostFallback(buildWebSocketEndpoint(), interval, onRestartRequired)
 					if err != nil {
-						log.Println("POST fallback stopped:", err)
+						pkg_flags.LogStatus("POST fallback stopped:", err)
 						return
 					}
-					log.Println("WebSocket recovered from POST fallback")
+					pkg_flags.LogStatus("WebSocket recovered from POST fallback")
 					readDone = startSession(conn, onRestartRequired)
 				}
 			}
@@ -108,7 +107,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 			data := v2.BuildReportPayload(monitoring.GenerateReport())
 			err = conn.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
-				log.Println("Failed to send WebSocket message:", err)
+				pkg_flags.LogStatus("Failed to send WebSocket message:", err)
 				conn.Close()
 				conn = nil // Mark connection as dead
 				readDone = nil
@@ -119,7 +118,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 			if conn != nil {
 				err := conn.WritePing()
 				if err != nil {
-					log.Println("Failed to send heartbeat:", err)
+					pkg_flags.LogStatus("Failed to send heartbeat:", err)
 					conn.Close()
 					conn = nil // Mark connection as dead
 					readDone = nil
@@ -127,7 +126,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 				}
 			}
 		case <-readDone:
-			log.Println("WebSocket disconnected")
+			pkg_flags.LogStatus("WebSocket disconnected")
 			if conn != nil {
 				conn.Close()
 				conn = nil
@@ -143,10 +142,10 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 func reconnectNow(onRestartRequired func()) (*ws.SafeConn, <-chan struct{}) {
 	conn, err := connectWebSocket(buildWebSocketEndpoint())
 	if err != nil {
-		log.Println("Immediate reconnect failed:", err)
+		pkg_flags.LogStatus("Immediate reconnect failed:", err)
 		return nil, nil
 	}
-	log.Println("WebSocket reconnected")
+	pkg_flags.LogStatus("WebSocket reconnected")
 	return conn, startSession(conn, onRestartRequired)
 }
 
@@ -158,7 +157,7 @@ func startSession(conn *ws.SafeConn, onRestartRequired func()) <-chan struct{} {
 	done := make(chan struct{})
 	go handleWebSocketMessages(conn, done, onRestartRequired)
 	if err := conn.WritePing(); err != nil {
-		log.Println("Failed to send initial heartbeat:", err)
+		pkg_flags.LogStatus("Failed to send initial heartbeat:", err)
 	}
 	return done
 }
@@ -190,13 +189,13 @@ func buildWebSocketEndpoint() string {
 	if convertedEndpoint, err := utils.ConvertIDNToASCII(websocketEndpoint); err == nil {
 		return convertedEndpoint
 	} else {
-		log.Printf("Warning: Failed to convert WebSocket IDN to ASCII: %v", err)
+		pkg_flags.LogStatusf("Warning: Failed to convert WebSocket IDN to ASCII: %v", err)
 	}
 	return websocketEndpoint
 }
 
 func runPostFallback(websocketEndpoint string, interval float64, onRestartRequired func()) (*ws.SafeConn, error) {
-	log.Println("Entering v2 POST fallback mode")
+	pkg_flags.LogStatus("Entering v2 POST fallback mode")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go runV2PullLoop(ctx, onRestartRequired)
@@ -213,7 +212,7 @@ func runPostFallback(websocketEndpoint string, interval float64, onRestartRequir
 			ackIDs := snapshotV2AckEventIDs()
 			resp, err := postV2Request(v2.BuildReportRequest(reportID, monitoring.GenerateReport(), ackIDs))
 			if err != nil {
-				log.Println("Failed to POST v2 report:", err)
+				pkg_flags.LogStatus("Failed to POST v2 report:", err)
 				continue
 			}
 			clearV2AckEventIDs(ackIDs)
@@ -223,7 +222,7 @@ func runPostFallback(websocketEndpoint string, interval float64, onRestartRequir
 			if err == nil {
 				return conn, nil
 			}
-			log.Println("POST fallback WebSocket recovery failed:", err)
+			pkg_flags.LogStatus("POST fallback WebSocket recovery failed:", err)
 		}
 	}
 }
@@ -246,7 +245,7 @@ func runV2PullLoop(ctx context.Context, onRestartRequired func()) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Println("Failed to POST v2 pull:", err)
+			pkg_flags.LogStatus("Failed to POST v2 pull:", err)
 			timer := time.NewTimer(time.Duration(flags.ReconnectInterval) * time.Second)
 			select {
 			case <-ctx.Done():
@@ -309,7 +308,7 @@ func processV2ResponseEvents(resp *v2.Response, onRestartRequired func()) {
 	}
 	var result v2.EventResult
 	if err := v2.BindResult(resp.Result, &result); err != nil {
-		log.Println("Failed to bind v2 event result:", err)
+		pkg_flags.LogStatus("Failed to bind v2 event result:", err)
 		return
 	}
 	for _, event := range result.Events {
@@ -404,20 +403,20 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}, onRestartR
 		_, message_raw, err := conn.ReadMessage()
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				log.Printf("No heartbeat reply for %s, connection is dead", pongWait)
+				pkg_flags.LogStatusf("No heartbeat reply for %s, connection is dead", pongWait)
 			} else {
-				log.Println("WebSocket read error:", err)
+				pkg_flags.LogStatus("WebSocket read error:", err)
 			}
 			return
 		}
 		var message v2.Request
 		err = json.Unmarshal(message_raw, &message)
 		if err != nil {
-			log.Println("Bad ws message:", err)
+			pkg_flags.LogStatus("Bad ws message:", err)
 			continue
 		}
 		if message.JSONRPC != v2.Version {
-			log.Printf("Bad v2 ws message version %q", message.JSONRPC)
+			pkg_flags.LogStatusf("Bad v2 ws message version %q", message.JSONRPC)
 			continue
 		}
 		processV2Event(conn, message.Method, message.Params, "", onRestartRequired)
@@ -438,7 +437,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			go NewTask(p.TaskID, p.Command)
 			return true
 		} else {
-			log.Printf("bad v2 exec params: %v", err)
+			pkg_flags.LogStatusf("bad v2 exec params: %v", err)
 		}
 	case v2.MethodAgentPing:
 		var p struct {
@@ -450,7 +449,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			go NewPingTask(conn, p.TaskID, p.Type, p.Target)
 			return true
 		} else {
-			log.Printf("bad v2 ping params: %v", err)
+			pkg_flags.LogStatusf("bad v2 ping params: %v", err)
 		}
 	case v2.MethodAgentTerminal:
 		var p struct {
@@ -460,7 +459,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			go establishTerminalConnection(flags.Token, p.RequestID, flags.Endpoint)
 			return true
 		} else {
-			log.Printf("bad v2 terminal params: %v", err)
+			pkg_flags.LogStatusf("bad v2 terminal params: %v", err)
 		}
 	case v2.MethodAgentMessage, v2.MethodAgentEvent:
 		pkg_flags.LogStatusf("received v2 %s: %+v", method, params)
@@ -471,7 +470,7 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			go handleFileOperation(operation)
 			return true
 		} else {
-			log.Printf("bad v2 file params: %v", err)
+			pkg_flags.LogStatusf("bad v2 file params: %v", err)
 		}
 	case v2.MethodAgentStartupConfig:
 		var p v2.StartupConfigParams
@@ -479,17 +478,17 @@ func processV2Event(conn *ws.SafeConn, method string, params interface{}, eventI
 			go handleStartupConfig(p)
 			return true
 		}
-		log.Print("bad v2 startup configuration params")
+		pkg_flags.LogStatus("bad v2 startup configuration params")
 	case v2.MethodAgentSwitchVersion:
 		var p v2.SwitchVersionParams
 		if err := v2.BindParams(params, &p); err != nil {
-			log.Printf("bad v2 switch version params: %v", err)
+			pkg_flags.LogStatusf("bad v2 switch version params: %v", err)
 		} else {
 			go switchAgentVersion(p.Version, onRestartRequired)
 			return true
 		}
 	default:
-		log.Printf("unknown v2 event method %s", method)
+		pkg_flags.LogStatusf("unknown v2 event method %s", method)
 	}
 	return false
 }
@@ -505,7 +504,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 	if convertedEndpoint, err := utils.ConvertIDNToASCII(endpoint); err == nil {
 		endpoint = convertedEndpoint
 	} else {
-		log.Printf("Warning: Failed to convert Terminal WebSocket IDN to ASCII: %v", err)
+		pkg_flags.LogStatusf("Warning: Failed to convert Terminal WebSocket IDN to ASCII: %v", err)
 	}
 
 	// 使用与主 WS 相同的拨号策略
@@ -513,7 +512,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 
 	conn, _, err := dialer.Dial(endpoint, nil)
 	if err != nil {
-		log.Println("Failed to establish terminal connection:", err)
+		pkg_flags.LogStatus("Failed to establish terminal connection:", err)
 		return
 	}
 

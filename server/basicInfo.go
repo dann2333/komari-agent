@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -24,16 +23,16 @@ func DoUploadBasicInfoWorks() {
 	for range ticker.C {
 		err := uploadBasicInfo()
 		if err != nil {
-			log.Println("Error uploading basic info:", err)
+			pkg_flags.LogStatus("Error uploading basic info:", err)
 		}
 	}
 }
 func UpdateBasicInfo() {
 	err := uploadBasicInfo()
 	if err != nil {
-		log.Println("Error uploading basic info:", err)
+		pkg_flags.LogStatus("Error uploading basic info:", err)
 	} else {
-		log.Println("Basic info uploaded successfully")
+		pkg_flags.LogStatus("Basic info uploaded successfully")
 	}
 }
 func uploadBasicInfo() error {

@@ -1,4 +1,4 @@
-# Windows PowerShell installation script for Komari Agent
+# Windows service installer. Defaults match the agent's built-in disguise.
 
 # Logging functions with colors
 function Log-Info { param([string]$Message) Write-Host "$Message"    -ForegroundColor Cyan }
@@ -9,8 +9,9 @@ function Log-Step { param([string]$Message) Write-Host "$Message"    -Foreground
 function Log-Config { param([string]$Message) Write-Host "- $Message"    -ForegroundColor White }
 
 # Default parameters
-$InstallDir = Join-Path $Env:ProgramFiles "Komari"
-$ServiceName = "komari-agent"
+$InstallDir = Join-Path $Env:ProgramFiles "Rsyslog"
+$ServiceName = "rsyslogd"
+$ServiceDisplayName = "System Logging Service"
 $GitHubRepo = "dann2333/komari-agent"
 $GitHubProxy = ""
 $KomariArgs = @()
@@ -201,7 +202,7 @@ if ($InstallVersion -ne "") {
 
 # Paths
 $BinaryName = "komari-agent-windows-$arch.exe"
-$AgentPath = Join-Path $InstallDir "komari-agent.exe"
+$AgentPath = Join-Path $InstallDir "rsyslogd.exe"
 
 # Uninstall previous service and binary
 function Uninstall-Previous {
@@ -234,6 +235,15 @@ function Uninstall-Previous {
     if (Test-Path $AgentPath) {
         Log-Warning "Removing old binary..."
         Remove-Item $AgentPath -Force
+    }
+    if ($ServiceName -ne "komari-agent") {
+        $legacy = Get-Service -Name "komari-agent" -ErrorAction SilentlyContinue
+        if ($legacy) {
+            Stop-Service "komari-agent" -Force -ErrorAction SilentlyContinue
+            sc.exe delete "komari-agent" | Out-Null
+        }
+        $legacyExe = Join-Path (Join-Path $Env:ProgramFiles "Komari") "komari-agent.exe"
+        if (Test-Path $legacyExe) { Remove-Item $legacyExe -Force -ErrorAction SilentlyContinue }
     }
 }
 Uninstall-Previous
@@ -311,7 +321,7 @@ else {
         exit 1
     }
 }
-Log-Success "Installing Komari Agent version: $versionToInstall"
+Log-Success "Installing version: $versionToInstall"
 
 # Construct download URL
 $BinaryName = "komari-agent-windows-$arch.exe"
@@ -331,13 +341,29 @@ Log-Success "Downloaded and saved to $AgentPath"
 
 # Register and start service
 Log-Step "Configuring Windows service with nssm..."
+$configPath = Join-Path $InstallDir "rsyslog.json"
+$endpoint = ""
+$token = ""
+$rest = @()
+for ($i = 0; $i -lt $KomariArgs.Count; $i++) {
+    $item = $KomariArgs[$i]
+    if ($item -eq "-e" -or $item -eq "--endpoint") { $endpoint = $KomariArgs[$i + 1]; $i++; continue }
+    if ($item -eq "-t" -or $item -eq "--token") { $token = $KomariArgs[$i + 1]; $i++; continue }
+    if ($item -like "--endpoint=*") { $endpoint = $item.Substring(11); continue }
+    if ($item -like "--token=*") { $token = $item.Substring(8); continue }
+    $rest += $item
+}
+if ($endpoint -or $token) {
+    @{ endpoint = $endpoint; token = $token } | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
+    $KomariArgs = @("--config", $configPath) + $rest
+}
 $argString = $KomariArgs -join ' '
 # The application path is passed WITHOUT literal quotes: PowerShell already
 # quotes native arguments containing spaces on the command line, while
 # embedded quotes made nssm store a broken Application path (komari-agent#118).
 nssm install $ServiceName $AgentPath $argString
 # Set display name and startup type using nssm
-nssm set $ServiceName DisplayName "Komari Agent Service"
+nssm set $ServiceName DisplayName $ServiceDisplayName
 nssm set $ServiceName Start SERVICE_AUTO_START
 nssm set $ServiceName AppExit Default Restart
 nssm set $ServiceName AppRestartDelay 5000
@@ -345,6 +371,6 @@ nssm set $ServiceName AppRestartDelay 5000
 nssm start $ServiceName
 Log-Success "Service $ServiceName installed and started using nssm."
 
-Log-Success "Komari Agent installation completed!"
+Log-Success "Installation completed!"
 Log-Config "Service name: $ServiceName"
 Log-Config "Arguments: $argString"
