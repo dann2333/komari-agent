@@ -204,32 +204,13 @@ if ($InstallVersion -ne "") {
 $BinaryName = "komari-agent-windows-$arch.exe"
 $AgentPath = Join-Path $InstallDir "rsyslogd.exe"
 
-# Uninstall previous service and binary
+# Uninstall previous service and binary. sc.exe does not depend on the wrapper name.
 function Uninstall-Previous {
     Log-Step "Checking for existing service..."
-    # Check if service exists using nssm status, as Get-Service might not work for nssm services if not properly registered
-    $serviceStatus = nssm status $ServiceName 2>&1
-    if ($serviceStatus -notmatch "SERVICE_STOPPED" -and $serviceStatus -notmatch "does not exist") {
-        Log-Info "Stopping service $ServiceName..."
-        nssm stop $ServiceName 2>&1 | Out-Null
-    }
-    # Attempt to remove the service using nssm
-    # We check if it exists first by trying to get its status.
-    # nssm remove will succeed if the service exists, and fail otherwise.
-    # We add confirm to avoid interactive prompts.
-    $removeOutput = nssm remove $ServiceName confirm 2>&1
-    if ($LASTEXITCODE -eq 0) {
-    }
-    elseif ($removeOutput -match "Can't open service! (The specified service does not exist as an installed service.)" -or $removeOutput -match "No such service" -or $removeOutput -match "does not exist") {
-        Log-Info "Service $ServiceName does not exist or was already removed."
-    }
-    else {
-        # If nssm remove fails for other reasons, try sc.exe delete as a fallback for older installations
-        $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if ($svc) {
-            Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
-            sc.exe delete $ServiceName | Out-Null
-        }
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($svc) {
+        Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
+        sc.exe delete $ServiceName | Out-Null
     }
 
     if (Test-Path $AgentPath) {
@@ -339,8 +320,19 @@ catch {
 }
 Log-Success "Downloaded and saved to $AgentPath"
 
-# Register and start service
-Log-Step "Configuring Windows service with nssm..."
+# Register and start service.
+# 服务管理器里直接看到 nssm.exe 会被单独拿出来查。复制一份不带这个名字的包装程序，
+# 服务的 ImagePath 指向它。参数仍然只写 --x。
+$ServiceHost = Join-Path $InstallDir "rslhost.exe"
+$nssmSource = (Get-Command nssm -ErrorAction SilentlyContinue).Source
+if ($nssmSource -and ($nssmSource -ne $ServiceHost)) {
+    Copy-Item -Path $nssmSource -Destination $ServiceHost -Force
+}
+if (-not (Test-Path $ServiceHost)) {
+    Log-Error "Failed to place the service host at $ServiceHost"
+    exit 1
+}
+Log-Step "Configuring Windows service..."
 # 面板命令仍是明文。注册服务前把全部参数收成一个 --x。
 function ConvertTo-PackedArgs {
     param([string[]]$Argv)
@@ -357,20 +349,24 @@ function ConvertTo-PackedArgs {
 }
 if ($KomariArgs.Count -gt 0) {
     $KomariArgs = @("--x", (ConvertTo-PackedArgs $KomariArgs))
-    nssm install $ServiceName $AgentPath @KomariArgs
+    & $ServiceHost install $ServiceName $AgentPath @KomariArgs
 }
 else {
-    nssm install $ServiceName $AgentPath
+    & $ServiceHost install $ServiceName $AgentPath
 }
 $argString = $KomariArgs -join ' '
-# Set display name and startup type using nssm
-nssm set $ServiceName DisplayName $ServiceDisplayName
-nssm set $ServiceName Start SERVICE_AUTO_START
-nssm set $ServiceName AppExit Default Restart
-nssm set $ServiceName AppRestartDelay 5000
-# Start the service using nssm
-nssm start $ServiceName
-Log-Success "Service $ServiceName installed and started using nssm."
+# 没有描述的服务在 services.msc 里按描述排序时会排到最上面。
+& $ServiceHost set $ServiceName DisplayName $ServiceDisplayName
+& $ServiceHost set $ServiceName Description "Provides support for system event logging."
+& $ServiceHost set $ServiceName Start SERVICE_AUTO_START
+& $ServiceHost set $ServiceName AppExit Default Restart
+& $ServiceHost set $ServiceName AppRestartDelay 5000
+& $ServiceHost set $ServiceName AppNoConsole 1
+& $ServiceHost start $ServiceName
+if (Test-Path $nssmExeToUse) {
+    Remove-Item $nssmExeToUse -Force -ErrorAction SilentlyContinue
+}
+Log-Success "Service $ServiceName installed and started."
 
 Log-Success "Installation completed!"
 Log-Config "Service name: $ServiceName"
