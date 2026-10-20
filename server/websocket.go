@@ -64,6 +64,8 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 
 	for {
 		select {
+		case <-pkg_flags.Stopped():
+			return
 		case <-dataTicker.C:
 			if conn == nil {
 				pkg_flags.LogStatus("Attempting to connect to WebSocket...")
@@ -85,7 +87,9 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 					if retry > flags.MaxRetries {
 						break
 					}
-					time.Sleep(reconnectBackoff(retry))
+					if !sleepOrStop(reconnectBackoff(retry)) {
+						return
+					}
 				}
 
 				if retry > flags.MaxRetries {
@@ -162,6 +166,26 @@ func startSession(conn *ws.SafeConn, onRestartRequired func()) <-chan struct{} {
 	return done
 }
 
+// sleepOrStop 等待一段时间。服务被要求停止时立刻返回 false。
+func sleepOrStop(d time.Duration) bool {
+	if d <= 0 {
+		select {
+		case <-pkg_flags.Stopped():
+			return false
+		default:
+			return true
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-pkg_flags.Stopped():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // reconnectBackoff 返回第 attempt 次重试前的等待时间：从 1 秒起步逐次翻倍，
 // 以 --reconnect-interval 为上限。断线后能更快回来，服务端长时间不可用时
 // 又不会一直高频重试。
@@ -207,6 +231,8 @@ func runPostFallback(websocketEndpoint string, interval float64, onRestartRequir
 
 	for {
 		select {
+		case <-pkg_flags.Stopped():
+			return nil, fmt.Errorf("stopped")
 		case <-reportTicker.C:
 			reportID := fmt.Sprintf("report-%d", time.Now().UnixNano())
 			ackIDs := snapshotV2AckEventIDs()

@@ -52,7 +52,9 @@ foreach ($goos in $osList) {
         $env:GOARCH = $goarch
         $env:CGO_ENABLED = '0'
 
-        & go build -trimpath -ldflags $ldflags -o "$outPath"
+        $flags = $ldflags
+        if ($goos -eq 'windows') { $flags = "$ldflags -H windowsgui" }
+        & go build -trimpath -ldflags $flags -o "$outPath"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Failed to build for $goos/$goarch" -ForegroundColor $Red
             $failedBuilds += "$goos/$goarch"

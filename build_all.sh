@@ -57,7 +57,12 @@ for GOOS in "${OS_LIST[@]}"; do
     fi
 
     # 构建二进制文件
-    env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="${LDFLAGS}" -o "./build/$BINARY_NAME"
+    BUILD_LDFLAGS="${LDFLAGS}"
+    if [ "$GOOS" = "windows" ]; then
+      # 没有控制台窗口。服务进程本来就在 Session 0，这样手动双击也不会闪一下黑框。
+      BUILD_LDFLAGS="${LDFLAGS} -H windowsgui"
+    fi
+    env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o "./build/$BINARY_NAME"
 
     if [ $? -ne 0 ]; then
       echo -e "${RED}Failed to build for $GOOS/$GOARCH${NC}"

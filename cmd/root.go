@@ -111,10 +111,11 @@ var RootCmd = &cobra.Command{
 			stopWarning = startSecurityWarning(stopCtx)
 		}
 		defer stopWarning()
-		shutdown := newShutdownCoordinator(stopWarning, netstatic.Stop, os.Exit)
+		shutdown := newShutdownCoordinator(stopWarning, netstatic.Stop, serviceExit)
 		go func() {
 			select {
 			case <-sigCh:
+			case <-pkg_flags.Stopped():
 			case <-stopCtx.Done():
 				// RunE 已经返回，收尾交给 defer，这里直接退出协程
 				return
@@ -190,6 +191,12 @@ var RootCmd = &cobra.Command{
 		}
 		go server.DoUploadBasicInfoWorks()
 		for {
+			select {
+			case <-pkg_flags.Stopped():
+				shutdown.shutdown(0)
+				return nil
+			default:
+			}
 			server.UpdateBasicInfo()
 			server.EstablishWebSocketConnection(func() {
 				shutdown.shutdown(42)
@@ -198,7 +205,17 @@ var RootCmd = &cobra.Command{
 	},
 }
 
-func Execute() {
+func serviceExit(code int) {
+	// 正常停止要先报告 SERVICE_STOPPED。更新或出错则直接退出，
+	// 让服务恢复策略把进程拉起来。
+	if serviceControlled() && code == 0 {
+		pkg_flags.RequestStop()
+		return
+	}
+	os.Exit(code)
+}
+
+func runCommand() error {
 	for i, arg := range os.Args {
 		if arg == "-autoUpdate" || arg == "--autoUpdate" {
 			log.Println("WARNING: The -autoUpdate flag is deprecated in version 0.0.9 and later. Use --disable-auto-update to configure auto-update behavior.")
@@ -212,8 +229,18 @@ func Execute() {
 			os.Args = append(os.Args[:i], os.Args[i+1:]...)
 		}
 	}
+	return RootCmd.Execute()
+}
 
-	if err := RootCmd.Execute(); err != nil {
+func Execute() {
+	if entered, err := runAsWindowsService(runCommand); entered {
+		if err != nil {
+			log.Println(err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := runCommand(); err != nil {
 		log.Println(err)
 		os.Exit(1)
 	}

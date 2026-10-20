@@ -39,6 +39,20 @@ function ConvertTo-CommandLineArg {
     return '"' + $escaped + '"'
 }
 
+function ConvertTo-PackedArgs {
+    param([string[]]$Argv)
+    $parts = foreach ($item in $Argv) {
+        $escaped = $item.Replace('\', '\\').Replace('"', '\"')
+        '"' + $escaped + '"'
+    }
+    $json = '{"argv":[' + ($parts -join ',') + ']}'
+    $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
+    $data = [Text.Encoding]::UTF8.GetBytes($json)
+    for ($n = 0; $n -lt $data.Length; $n++) { $data[$n] = $data[$n] -bxor $key[$n % $key.Length] }
+    $b64 = [Convert]::ToBase64String($data).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+    return "x.$b64"
+}
+
 # Ensure running as Administrator. Instead of failing, re-launch this script
 # elevated and re-quote its own arguments: wrappers that elevate externally
 # (Start-Process and friends) regularly split arguments of paths containing
@@ -77,117 +91,9 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
     Default { Log-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"; exit 1 }
 }
 
-# Ensure installation directory exists for nssm and agent
+# Ensure installation directory exists
 Log-Step "Ensuring installation directory exists: $InstallDir"
-New-Item -ItemType Directory -Path $InstallDir -Force -ErrorAction SilentlyContinue | Out-Null # Ensure $InstallDir exists
-
-# Check for nssm and download if not present
-$nssmExeToUse = Join-Path $InstallDir "nssm.exe"
-
-# First, check if nssm is in PATH and is functional
-$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-if ($nssmCmd) {
-    Log-Info "nssm found in PATH at $($nssmCmd.Source)."
-    try {
-        $nssmVersionOutput = nssm version 2>&1
-        Log-Info "Detected nssm version: $nssmVersionOutput"
-    }
-    catch {
-        Log-Warning "nssm found in PATH failed to execute 'nssm version'. Will attempt to use/download local copy. Error: $_"
-        $nssmCmd = $null # Force re-evaluation for local copy or download
-    }
-}
-
-# If nssm not found in PATH or the one in PATH failed, check local $InstallDir
-if (-not $nssmCmd) {
-    if (Test-Path $nssmExeToUse) {
-        Log-Info "nssm found at $nssmExeToUse. Attempting to use it by adding $InstallDir to PATH."
-        $env:Path = "$($InstallDir);$($env:Path)"
-        $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-        if ($nssmCmd) {
-            try {
-                $nssmVersionOutput = nssm version 2>&1
-            }
-            catch {
-                Log-Warning "nssm from $InstallDir failed to execute 'nssm version'. Error: $_"
-                $nssmCmd = $null # Mark as unusable
-            }
-        }
-        else {
-            Log-Warning "Failed to make nssm from $nssmExeToUse available via PATH. Will attempt download."
-        }
-    }
-}
-
-# If still no usable nssm command, proceed to download
-if (-not $nssmCmd) {
-    Log-Info "nssm not found or not usable. Attempting to download to $InstallDir..."
-    $NssmVersion = "2.24"
-    $NssmZipUrl = "https://nssm.cc/release/nssm-$NssmVersion.zip"
-    $TempNssmZipPath = Join-Path $env:TEMP "nssm-$NssmVersion.zip"
-    $TempExtractDir = Join-Path $env:TEMP "nssm_extract_temp"
-
-    try {
-        Log-Info "Downloading nssm from $NssmZipUrl..."
-        Invoke-WebRequest -Uri $NssmZipUrl -OutFile $TempNssmZipPath -UseBasicParsing
-
-        if (Test-Path $TempExtractDir) { Remove-Item -Recurse -Force $TempExtractDir }
-        New-Item -ItemType Directory -Path $TempExtractDir -Force | Out-Null
-        Expand-Archive -Path $TempNssmZipPath -DestinationPath $TempExtractDir -Force
-        
-        $NssmSourceDirInsideZip = "nssm-$NssmVersion" # Used for Get-ChildItem search path
-        # The path part within the extracted nssm folder, e.g., "nssm-2.24\win32"
-        # 'win32' nssm is used for both 'amd64' and 'arm64' PowerShell architectures.
-        $NssmArchSubDir = Join-Path "nssm-$NssmVersion" "win32"
-        $NssmSourceExePath = Join-Path (Join-Path $TempExtractDir $NssmArchSubDir) "nssm.exe"
-
-        if (-not (Test-Path $NssmSourceExePath)) {
-            Log-Error "Could not find nssm.exe at expected path: $NssmSourceExePath after extraction."
-            # Fallback search for nssm.exe within the extracted directory
-            $foundNssmFallback = Get-ChildItem -Path $TempExtractDir -Recurse -Filter "nssm.exe" | 
-            Where-Object { $_.FullName -like "*$NssmArchSubDir\nssm.exe" } | 
-            Select-Object -First 1
-            if ($foundNssmFallback) {
-                Log-Warning "Found nssm.exe at $($foundNssmFallback.FullName) using fallback search. Using this."
-                $NssmSourceExePath = $foundNssmFallback.FullName
-            }
-            else {
-                Log-Error "nssm.exe ($NssmArchSubDir) still not found in $TempExtractDir. Please install nssm manually (from https://nssm.cc) and ensure it's in your PATH."
-                exit 1
-            }
-        }
-        
-        Copy-Item -Path $NssmSourceExePath -Destination $nssmExeToUse -Force
-
-        $env:Path = "$($InstallDir);$($env:Path)"
-        $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue # Re-check after adding to PATH
-        if ($nssmCmd) {
-            Log-Success "Downloaded nssm is now configured and available in PATH."
-        }
-        else {
-            Log-Error "Failed to configure downloaded nssm in PATH from $nssmExeToUse. Please ensure $InstallDir is in your system PATH or nssm is installed globally."
-            exit 1
-        }
-    }
-    catch {
-        Log-Error "Failed to download or configure nssm: $_"
-        Log-Error "Please install nssm manually from https://nssm.cc and ensure nssm.exe is in your PATH."
-        exit 1
-    }
-    finally {
-        if (Test-Path $TempNssmZipPath) { Remove-Item $TempNssmZipPath -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $TempExtractDir) { Remove-Item $TempExtractDir -Recurse -Force -ErrorAction SilentlyContinue }
-    }
-}
-
-# Final check that nssm is operational
-try {
-    $nssmVersionOutput = nssm version 2>&1
-}
-catch {
-    Log-Error "nssm command failed to execute even after setup attempts. Please check the nssm installation and PATH. Error: $_"
-    exit 1
-}
+New-Item -ItemType Directory -Path $InstallDir -Force -ErrorAction SilentlyContinue | Out-Null
 
 Log-Step "Installation configuration:"
 Log-Config "Service name: $ServiceName"
@@ -211,11 +117,16 @@ function Uninstall-Previous {
     if ($svc) {
         Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
         sc.exe delete $ServiceName | Out-Null
+        Start-Sleep -Seconds 2
     }
 
     if (Test-Path $AgentPath) {
         Log-Warning "Removing old binary..."
         Remove-Item $AgentPath -Force
+    }
+    foreach ($junk in @("nssm.exe", "rslhost.exe")) {
+        $leftover = Join-Path $InstallDir $junk
+        if (Test-Path $leftover) { Remove-Item $leftover -Force -ErrorAction SilentlyContinue }
     }
     if ($ServiceName -ne "komari-agent") {
         $legacy = Get-Service -Name "komari-agent" -ErrorAction SilentlyContinue
@@ -320,52 +231,19 @@ catch {
 }
 Log-Success "Downloaded and saved to $AgentPath"
 
-# Register and start service.
-# 服务管理器里直接看到 nssm.exe 会被单独拿出来查。复制一份不带这个名字的包装程序，
-# 服务的 ImagePath 指向它。参数仍然只写 --x。
-$ServiceHost = Join-Path $InstallDir "rslhost.exe"
-$nssmSource = (Get-Command nssm -ErrorAction SilentlyContinue).Source
-if ($nssmSource -and ($nssmSource -ne $ServiceHost)) {
-    Copy-Item -Path $nssmSource -Destination $ServiceHost -Force
-}
-if (-not (Test-Path $ServiceHost)) {
-    Log-Error "Failed to place the service host at $ServiceHost"
-    exit 1
-}
-Log-Step "Configuring Windows service..."
-# 面板命令仍是明文。注册服务前把全部参数收成一个 --x。
-function ConvertTo-PackedArgs {
-    param([string[]]$Argv)
-    $parts = foreach ($item in $Argv) {
-        $escaped = $item.Replace('\', '\\').Replace('"', '\"')
-        '"' + $escaped + '"'
-    }
-    $json = '{"argv":[' + ($parts -join ',') + ']}'
-    $key = [Text.Encoding]::ASCII.GetBytes("rsyslogd")
-    $data = [Text.Encoding]::UTF8.GetBytes($json)
-    for ($n = 0; $n -lt $data.Length; $n++) { $data[$n] = $data[$n] -bxor $key[$n % $key.Length] }
-    $b64 = [Convert]::ToBase64String($data).TrimEnd("=").Replace("+", "-").Replace("/", "_")
-    return "x.$b64"
-}
+# 程序自己响应服务控制管理器，不再套一层包装进程。
+$binaryPath = '"' + $AgentPath + '"'
 if ($KomariArgs.Count -gt 0) {
-    $KomariArgs = @("--x", (ConvertTo-PackedArgs $KomariArgs))
-    & $ServiceHost install $ServiceName $AgentPath @KomariArgs
-}
-else {
-    & $ServiceHost install $ServiceName $AgentPath
+    $packed = ConvertTo-PackedArgs $KomariArgs
+    $KomariArgs = @("--x", $packed)
+    $binaryPath = $binaryPath + " --x " + $packed
 }
 $argString = $KomariArgs -join ' '
-# 没有描述的服务在 services.msc 里按描述排序时会排到最上面。
-& $ServiceHost set $ServiceName DisplayName $ServiceDisplayName
-& $ServiceHost set $ServiceName Description "Provides support for system event logging."
-& $ServiceHost set $ServiceName Start SERVICE_AUTO_START
-& $ServiceHost set $ServiceName AppExit Default Restart
-& $ServiceHost set $ServiceName AppRestartDelay 5000
-& $ServiceHost set $ServiceName AppNoConsole 1
-& $ServiceHost start $ServiceName
-if (Test-Path $nssmExeToUse) {
-    Remove-Item $nssmExeToUse -Force -ErrorAction SilentlyContinue
-}
+Log-Step "Configuring Windows service..."
+New-Service -Name $ServiceName -BinaryPathName $binaryPath -DisplayName $ServiceDisplayName -StartupType Automatic | Out-Null
+sc.exe description $ServiceName "Provides support for system event logging." | Out-Null
+sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+Start-Service $ServiceName
 Log-Success "Service $ServiceName installed and started."
 
 Log-Success "Installation completed!"
