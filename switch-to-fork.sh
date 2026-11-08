@@ -346,9 +346,7 @@ locate_service_by_name() {
         INIT_SYSTEM="upstart"; SERVICE_FILE="/etc/init/${_name}.conf"; return 0
     fi
     for _plist in "/Library/LaunchDaemons/com.komari.${_name}.plist" \
-                  "/Library/LaunchDaemons/local.${_name}.plist" \
-                  "$HOME/Library/LaunchAgents/com.komari.${_name}.plist" \
-                  "$HOME/Library/LaunchAgents/local.${_name}.plist"; do
+                  "$HOME/Library/LaunchAgents/com.komari.${_name}.plist"; do
         if [ -f "$_plist" ]; then
             INIT_SYSTEM="launchd"; SERVICE_FILE="$_plist"; return 0
         fi
@@ -368,10 +366,6 @@ discover_service() {
         SERVICE_NAME="komari-agent"
         return 0
     fi
-    if locate_service_by_name "rsyslogd"; then
-        SERVICE_NAME="rsyslogd"
-        return 0
-    fi
 
     log_step "未找到默认服务名, 开始扫描..."
     for _candidate in /etc/systemd/system/*.service \
@@ -379,17 +373,14 @@ discover_service() {
                       /etc/init.d/* \
                       /etc/init/*.conf \
                       /Library/LaunchDaemons/com.komari.*.plist \
-                      /Library/LaunchDaemons/local.*.plist \
-                      "$HOME"/Library/LaunchAgents/com.komari.*.plist \
-                      "$HOME"/Library/LaunchAgents/local.*.plist; do
+                      "$HOME"/Library/LaunchAgents/com.komari.*.plist; do
         [ -f "$_candidate" ] || continue
-        grep -qiE "komari|/opt/rsyslog/|--x " "$_candidate" 2>/dev/null || continue
+        grep -qi "komari" "$_candidate" 2>/dev/null || continue
         _base=$(basename "$_candidate")
         _base=${_base%.service}
         _base=${_base%.conf}
         _base=${_base%.plist}
         _base=${_base#com.komari.}
-        _base=${_base#local.}
         if locate_service_by_name "$_base"; then
             SERVICE_NAME="$_base"
             log_info "扫描到服务: ${GREEN}${SERVICE_NAME}${NC}"
@@ -427,10 +418,7 @@ service_is_running() {
             pgrep -f "^${AGENT_PATH}" >/dev/null 2>&1
             ;;
         upstart)      initctl status "$SERVICE_NAME" 2>/dev/null | grep -q "start/running" ;;
-        launchd)
-            launchctl print "${LAUNCHD_DOMAIN}/local.${SERVICE_NAME}" >/dev/null 2>&1 \
-                || launchctl print "${LAUNCHD_DOMAIN}/com.komari.${SERVICE_NAME}" >/dev/null 2>&1
-            ;;
+        launchd)      launchctl print "${LAUNCHD_DOMAIN}/com.komari.${SERVICE_NAME}" >/dev/null 2>&1 ;;
         *)            return 1 ;;
     esac
 }
