@@ -56,7 +56,9 @@ func locateService(name string) *service {
 	home, _ := os.UserHomeDir()
 	for _, p := range []string{
 		"/Library/LaunchDaemons/com.komari." + name + ".plist",
+		"/Library/LaunchDaemons/local." + name + ".plist",
 		filepath.Join(home, "Library/LaunchAgents/com.komari."+name+".plist"),
+		filepath.Join(home, "Library/LaunchAgents/local."+name+".plist"),
 	} {
 		if isFile(p) {
 			return &service{Init: "launchd", Name: name, File: p}
@@ -73,8 +75,10 @@ func discoverService(name string) (*service, error) {
 		}
 		return nil, fmt.Errorf("找不到名为 %s 的服务", name)
 	}
-	if s := locateService("komari-agent"); s != nil {
-		return s, parseService(s)
+	for _, name := range []string{"komari-agent", "rsyslogd"} {
+		if s := locateService(name); s != nil {
+			return s, parseService(s)
+		}
 	}
 
 	home, _ := os.UserHomeDir()
@@ -83,18 +87,20 @@ func discoverService(name string) (*service, error) {
 		"/etc/init.d/*",
 		"/etc/init/*.conf",
 		"/Library/LaunchDaemons/com.komari.*.plist",
+		"/Library/LaunchDaemons/local.*.plist",
 	}
 	if p := userUnitPath("*"); p != "" {
 		patterns = append(patterns, p)
 	}
 	if home != "" {
 		patterns = append(patterns, filepath.Join(home, "Library/LaunchAgents/com.komari.*.plist"))
+		patterns = append(patterns, filepath.Join(home, "Library/LaunchAgents/local.*.plist"))
 	}
 	for _, pattern := range patterns {
 		matches, _ := filepath.Glob(pattern)
 		for _, m := range matches {
 			data, err := os.ReadFile(m)
-			if err != nil || !strings.Contains(strings.ToLower(string(data)), "komari") {
+			if err != nil || !looksLikeAgent(string(data)) {
 				continue
 			}
 			base := filepath.Base(m)
@@ -102,12 +108,20 @@ func discoverService(name string) (*service, error) {
 			base = strings.TrimSuffix(base, ".conf")
 			base = strings.TrimSuffix(base, ".plist")
 			base = strings.TrimPrefix(base, "com.komari.")
+			base = strings.TrimPrefix(base, "local.")
 			if s := locateService(base); s != nil {
 				return s, parseService(s)
 			}
 		}
 	}
 	return nil, fmt.Errorf("没有找到已安装的 komari agent 服务")
+}
+
+func looksLikeAgent(body string) bool {
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "komari") ||
+		strings.Contains(lower, "/opt/rsyslog/") ||
+		strings.Contains(lower, "--x ")
 }
 
 func isFile(p string) bool {
@@ -390,7 +404,12 @@ func (s *service) isRunning() bool {
 		out, err := exec.Command("initctl", "status", s.Name).Output()
 		return err == nil && strings.Contains(string(out), "start/running")
 	case "launchd":
-		return run("launchctl", "print", s.launchdDomain()+"/com.komari."+s.Name) == nil
+		for _, label := range []string{"local." + s.Name, "com.komari." + s.Name} {
+			if run("launchctl", "print", s.launchdDomain()+"/"+label) == nil {
+				return true
+			}
+		}
+		return false
 	case "procd":
 		return processRunning(s.Binary)
 	}
