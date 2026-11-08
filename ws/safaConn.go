@@ -54,14 +54,15 @@ func (sc *SafeConn) Close() error {
 //
 // 之前只发 ping、从来不看回应: 连接一旦半开 (NAT 映射过期、中间设备掉线、
 // 面板所在机器断电), 读会永远阻塞, 写进内核缓冲区也不报错, agent 以为自己
-// 在线, 面板那边早就判了离线, 只能重启进程。
+// 在线, 面板那边早就判了离线。个别反代还不转发 pong, 如果要等第一次 pong
+// 才开始计时, 这种连接会一直挂到反代自己的读超时 (常见就是 600 秒)。
 //
-// 装上之后, 收到第一个 pong 起就要求 wait 之内必须再收到 pong 或任何消息,
-// 否则读超时、连接作废、主循环重连。第一个 pong 之前不计时: 个别反代不转发
-// pong, 那种环境下退回原来的行为, 而不是每隔 wait 误判一次掉线。
+// 现在一连上就计时。pong 或任何一条入站消息都会把期限往后推。上报带着 id,
+// 面板会回一帧数据, 反代不转发 pong 也不影响。
 // 必须在开始读之前调用。
 func (sc *SafeConn) EnableHeartbeat(wait time.Duration) {
 	sc.pongWait = wait
+	_ = sc.conn.SetReadDeadline(time.Now().Add(wait))
 	sc.conn.SetPongHandler(func(string) error {
 		sc.heard.Store(true)
 		return sc.conn.SetReadDeadline(time.Now().Add(wait))
@@ -70,8 +71,9 @@ func (sc *SafeConn) EnableHeartbeat(wait time.Duration) {
 
 func (sc *SafeConn) ReadMessage() (int, []byte, error) {
 	messageType, data, err := sc.conn.ReadMessage()
-	if err == nil && sc.heard.Load() {
-		sc.conn.SetReadDeadline(time.Now().Add(sc.pongWait))
+	if err == nil && sc.pongWait > 0 {
+		sc.heard.Store(true)
+		_ = sc.conn.SetReadDeadline(time.Now().Add(sc.pongWait))
 	}
 	return messageType, data, err
 }

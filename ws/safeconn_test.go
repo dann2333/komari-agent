@@ -74,8 +74,9 @@ func TestHeartbeatDetectsSilentPeer(t *testing.T) {
 	}
 }
 
-// 从来不回 pong 的环境 (个别反代): 不能每隔 wait 就误判一次掉线
-func TestHeartbeatStaysOffWithoutPong(t *testing.T) {
+// 从来不回 pong、也不发任何数据: 不能再一直当成在线。反代读超时经常是 600 秒,
+// 之前要等第一次 pong 才计时, 这段时间面板收不到上报。
+func TestSilentPeerTimesOutWithoutPong(t *testing.T) {
 	sc := dial(t, func(c *websocket.Conn) {
 		c.SetPingHandler(func(string) error { return nil })
 		for {
@@ -91,7 +92,38 @@ func TestHeartbeatStaysOffWithoutPong(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		t.Fatalf("connection dropped although the peer is alive: %v", err)
+		if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+			t.Fatalf("expected a read timeout, got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("silent connection was never noticed")
+	}
+}
+
+// 反代把 pong 吃掉, 但数据帧还在 (面板对带 id 的上报有回复): 不能拆连接。
+func TestInboundDataKeepsConnectionAlive(t *testing.T) {
+	sc := dial(t, func(c *websocket.Conn) {
+		c.SetPingHandler(func(string) error { return nil })
+		go func() {
+			ticker := time.NewTicker(80 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := c.WriteMessage(websocket.TextMessage, []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`)); err != nil {
+					return
+				}
+			}
+		}()
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	sc.EnableHeartbeat(300 * time.Millisecond)
+	done := readResult(sc)
+	select {
+	case err := <-done:
+		t.Fatalf("connection dropped although data is still arriving: %v", err)
 	case <-time.After(time.Second):
 	}
 }

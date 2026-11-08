@@ -34,8 +34,9 @@ const (
 	v2SeenEventTTL   = 10 * time.Minute
 	v2SeenEventLimit = 4096
 
-	// 心跳间隔, 以及多久没收到 pong/消息就认定连接已经死了。
-	// 面板那边的读超时是 75 秒, 这里要比它先发现, 才能尽快重连回来。
+	// 心跳间隔, 以及多久没收到 pong 或任何入站消息就认定连接已经死了。
+	// 面板的读超时更长。这里要比它先发现, 也不能短过上报间隔,
+	// 否则反代不转发 pong 时, 下一次上报回复还没到就拆连接。
 	heartbeatInterval = 15 * time.Second
 	pongWait          = 40 * time.Second
 )
@@ -108,7 +109,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 			}
 			nextReportAt = time.Now().Add(reportInterval)
 
-			data := v2.BuildReportPayload(monitoring.GenerateReport())
+			data := v2.BuildReportRequest(time.Now().UnixNano(), monitoring.GenerateReport(), nil)
 			err = conn.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				pkg_flags.LogStatus("Failed to send WebSocket message:", err)
@@ -153,11 +154,20 @@ func reconnectNow(onRestartRequired func()) (*ws.SafeConn, <-chan struct{}) {
 	return conn, startSession(conn, onRestartRequired)
 }
 
+// livenessWait 是读超时。上报间隔比 40 秒还长时, 放宽到至少能等回这一次上报的回复。
+func livenessWait() time.Duration {
+	wait := pongWait
+	interval := time.Duration(math.Max(1, flags.Interval) * float64(time.Second))
+	if need := interval + heartbeatInterval; need > wait {
+		wait = need
+	}
+	return wait
+}
+
 // startSession 给新连接装上存活检测并开始读消息, 返回的 channel 在连接断开
-// (包括心跳超时) 时关闭。连上就先 ping 一次: 存活检测从第一个 pong 起才计时,
-// 越早拿到 pong, 刚连上就掉的情况也越早能发现。
+// (包括心跳超时) 时关闭。连上就先 ping 一次。
 func startSession(conn *ws.SafeConn, onRestartRequired func()) <-chan struct{} {
-	conn.EnableHeartbeat(pongWait)
+	conn.EnableHeartbeat(livenessWait())
 	done := make(chan struct{})
 	go handleWebSocketMessages(conn, done, onRestartRequired)
 	if err := conn.WritePing(); err != nil {
@@ -419,6 +429,7 @@ func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
 		}
 		return nil, err
 	}
+	ws.Tune(conn.NetConn())
 
 	return ws.NewSafeConn(conn), nil
 }
@@ -443,6 +454,10 @@ func handleWebSocketMessages(conn *ws.SafeConn, done chan<- struct{}, onRestartR
 		}
 		if message.JSONRPC != v2.Version {
 			pkg_flags.LogStatusf("Bad v2 ws message version %q", message.JSONRPC)
+			continue
+		}
+		if message.Method == "" {
+			// 带 id 的上报会收到一帧 JSON-RPC 响应。没有 method, 只用来证明连接还通。
 			continue
 		}
 		processV2Event(conn, message.Method, message.Params, "", onRestartRequired)
