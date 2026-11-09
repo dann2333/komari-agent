@@ -390,6 +390,56 @@ discover_service() {
     return 1
 }
 
+# 官方服务名是 komari-agent。换成 rsyslogd，和系统的 rsyslog.service 不重名。
+# 失败时 undo 只删新建的单元，原来的文件由备份写回去。
+disguise_service() {
+    RENAMED=0
+    [ "$SERVICE_NAME" = "komari-agent" ] || return 0
+    case "$INIT_SYSTEM" in
+        systemd|systemd-user|procd) ;;
+        *) return 0 ;;
+    esac
+    case "$INIT_SYSTEM" in
+        procd) _new="$(dirname "$SERVICE_FILE")/rsyslogd" ;;
+        *)     _new="$(dirname "$SERVICE_FILE")/rsyslogd.service" ;;
+    esac
+    if [ -e "$_new" ]; then
+        log_error "${_new} 已经存在, 没有改服务名"
+        return 1
+    fi
+    if [ "$INIT_SYSTEM" = "procd" ]; then
+        cp "$SERVICE_FILE" "$_new" || return 1
+        chmod +x "$_new"
+    else
+        sed 's/^Description=.*/Description=System Logging Service/' "$SERVICE_FILE" > "$_new" || return 1
+    fi
+    service_ctl disable >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE"
+    OLD_SERVICE_NAME=$SERVICE_NAME
+    OLD_SERVICE_FILE=$SERVICE_FILE
+    SERVICE_NAME=rsyslogd
+    SERVICE_FILE=$_new
+    RENAMED=1
+    reload_service_definition
+    if ! service_ctl enable; then
+        undo_disguise
+        return 1
+    fi
+}
+
+undo_disguise() {
+    [ "$RENAMED" = "1" ] || return 0
+    service_ctl disable >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE"
+    case "$INIT_SYSTEM" in
+        procd) rm -f /etc/rc.d/S*"$SERVICE_NAME" /etc/rc.d/K*"$SERVICE_NAME" ;;
+    esac
+    SERVICE_NAME=$OLD_SERVICE_NAME
+    SERVICE_FILE=$OLD_SERVICE_FILE
+    RENAMED=0
+    reload_service_definition
+}
+
 service_ctl() {
     _action="$1"
     case "$INIT_SYSTEM" in
@@ -413,9 +463,15 @@ service_is_running() {
         systemd-user) systemctl --user is-active --quiet "${SERVICE_NAME}.service" ;;
         openrc)       rc-service "$SERVICE_NAME" status >/dev/null 2>&1 ;;
         procd)
-            # 用 ^ 锚定命令行开头, 否则命令行里碰巧带有这个路径的其他进程
-            # (比如正在跑的运维命令) 会让已经挂掉的服务被误判成还活着
-            pgrep -f "^${AGENT_PATH}" >/dev/null 2>&1
+            # 不看命令行。切换后的程序会把 argv 抹掉，用 pgrep 会以为服务没起来。
+            for _proc in /proc/[0-9]*; do
+                _exe=$(readlink "$_proc/exe" 2>/dev/null) || continue
+                case "$_exe" in
+                    *" (deleted)") continue ;;
+                esac
+                [ "$_exe" = "$AGENT_PATH" ] && return 0
+            done
+            return 1
             ;;
         upstart)      initctl status "$SERVICE_NAME" 2>/dev/null | grep -q "start/running" ;;
         launchd)      launchctl print "${LAUNCHD_DOMAIN}/com.komari.${SERVICE_NAME}" >/dev/null 2>&1 ;;
@@ -1038,7 +1094,16 @@ do_revert() {
         exit 0
     fi
     service_ctl stop >/dev/null 2>&1 || true
+    _orig_file=$(sed -n 's/^SERVICE_FILE=//p' "${_dir}/meta" 2>/dev/null)
+    _orig_name=$(sed -n 's/^SERVICE_NAME=//p' "${_dir}/meta" 2>/dev/null)
+    if [ -n "$_orig_file" ] && [ "$SERVICE_FILE" != "$_orig_file" ]; then
+        service_ctl disable >/dev/null 2>&1 || true
+        rm -f "$SERVICE_FILE"
+        SERVICE_FILE=$_orig_file
+        [ -n "$_orig_name" ] && SERVICE_NAME=$_orig_name
+    fi
     restore_backup "$_dir" || { log_error "回滚失败"; exit 1; }
+    service_ctl enable >/dev/null 2>&1 || true
     service_ctl start || { log_error "服务启动失败, 请手动检查"; exit 1; }
     log_success "已回滚到切换前的版本"
     exit 0
@@ -1249,12 +1314,29 @@ if [ "$NEW_ARGS" != "$CURRENT_ARGS" ]; then
     reload_service_definition
 fi
 
-log_step "启动服务..."
-if ! service_ctl start; then
-    log_error "服务启动失败, 正在回滚到原版本"
+if [ "$SERVICE_NAME" = "komari-agent" ]; then
+    log_step "服务名改为 rsyslogd..."
+fi
+if ! disguise_service; then
+    log_error "改服务名失败, 正在回滚"
+    undo_disguise
     restore_backup "$backup_path"
+    service_ctl enable >/dev/null 2>&1 || true
     service_ctl start || true
     exit 1
+fi
+
+log_step "启动服务..."
+if ! service_ctl start; then
+    sleep 1
+    if ! service_is_running; then
+        log_error "服务启动失败, 正在回滚到原版本"
+        undo_disguise
+        restore_backup "$backup_path"
+        service_ctl enable >/dev/null 2>&1 || true
+        service_ctl start || true
+        exit 1
+    fi
 fi
 
 sleep 2
@@ -1262,7 +1344,9 @@ if service_is_running; then
     log_success "服务已经跑起来了"
 else
     log_error "服务没能保持运行, 正在回滚到原版本"
+    undo_disguise
     restore_backup "$backup_path"
+    service_ctl enable >/dev/null 2>&1 || true
     service_ctl start || true
     log_info "可以先看日志排查: 服务名 ${SERVICE_NAME}"
     exit 1

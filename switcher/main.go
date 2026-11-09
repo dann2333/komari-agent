@@ -371,11 +371,18 @@ func main() {
 	}
 	logOK("已备份原版本到 %s", paint(green, backupPath))
 
+	var undoRename func()
 	rollback := func(reason string) {
 		logError("%s, 正在回滚到原版本", reason)
+		if undoRename != nil {
+			undoRename()
+			undoRename = nil
+		}
 		if err := restoreBackup(svc, backupPath); err != nil {
 			logError("回滚也失败了: %v", err)
 			logInfo("备份还在 %s, 可以手工恢复", backupPath)
+		} else {
+			_ = svc.enable()
 		}
 		svc.control("start")
 		os.Exit(1)
@@ -399,12 +406,20 @@ func main() {
 		svc.reloadDefinition()
 	}
 
+	if svc.Name == "komari-agent" {
+		logStep("服务名改为 rsyslogd...")
+		undo, err := svc.hideServiceName()
+		if err != nil {
+			rollback(fmt.Sprintf("改服务名失败 (%v)", err))
+		}
+		undoRename = undo
+	}
+
 	logStep("启动服务...")
-	if err := svc.control("start"); err != nil {
+	if err := svc.control("start"); err != nil && !waitUntilRunning(svc) {
 		rollback(fmt.Sprintf("服务启动失败 (%v)", err))
 	}
-	time.Sleep(2 * time.Second)
-	if !svc.isRunning() {
+	if !waitUntilRunning(svc) {
 		rollback("服务没能保持运行")
 	}
 	logOK("服务已经跑起来了")
@@ -428,6 +443,34 @@ func main() {
 	fmt.Println(paint(white, "==========================================="))
 }
 
+func waitUntilRunning(svc *service) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if svc.isRunning() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func readMeta(dir string) map[string]string {
+	out := map[string]string{}
+	body, err := os.ReadFile(filepath.Join(dir, "meta"))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok && key != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 func doRevert(cfg *config, svc *service) {
 	dir := filepath.Join(filepath.Dir(svc.Binary), backupDir)
 	if !isFile(filepath.Join(dir, "agent.bak")) || !isFile(filepath.Join(dir, "service.bak")) {
@@ -440,10 +483,23 @@ func doRevert(cfg *config, svc *service) {
 		logWarn("dry-run: 到此为止, 没有实际改动")
 		return
 	}
+	meta := readMeta(dir)
+	origFile := meta["SERVICE_FILE"]
+	origName := meta["SERVICE_NAME"]
 	svc.control("stop")
+	if origFile != "" && svc.File != origFile {
+		svc.disable()
+		os.Remove(svc.File)
+		removeServiceLinks(svc.Init, svc.Name, filepath.Dir(svc.File))
+		svc.File = origFile
+		if origName != "" {
+			svc.Name = origName
+		}
+	}
 	if err := restoreBackup(svc, dir); err != nil {
 		fatal("回滚失败: %v", err)
 	}
+	_ = svc.enable()
 	if err := svc.control("start"); err != nil {
 		fatal("服务启动失败, 请手动检查: %v", err)
 	}

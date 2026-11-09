@@ -52,6 +52,28 @@ func TestMaskArgsHidesToken(t *testing.T) {
 	}
 }
 
+func TestLiveExeIgnoresMaskedAndDeleted(t *testing.T) {
+	if !liveExe("/opt/komari/agent", nil, "/opt/komari/agent") {
+		t.Fatal("matching exe should count as running")
+	}
+	if liveExe("/opt/komari/agent (deleted)", nil, "/opt/komari/agent") {
+		t.Fatal("replaced binary must not count as the new process")
+	}
+	if liveExe("rsyslogd", nil, "/opt/komari/agent") {
+		t.Fatal("masked comm name is not the executable path")
+	}
+}
+
+func TestRewriteUnitIdentity(t *testing.T) {
+	got := rewriteUnitIdentity("[Unit]\nDescription=Komari Agent\n\n[Service]\nExecStart=/opt/komari/agent\n")
+	if strings.Contains(got, "Komari") || !strings.Contains(got, "Description=System Logging Service") {
+		t.Fatalf("description not disguised:\n%s", got)
+	}
+	if !strings.Contains(got, "ExecStart=/opt/komari/agent") {
+		t.Fatalf("command line was dropped:\n%s", got)
+	}
+}
+
 func TestLooksLikeBinaryRejectsHTML(t *testing.T) {
 	dir := t.TempDir()
 	html := filepath.Join(dir, "page.html")
