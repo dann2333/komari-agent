@@ -972,36 +972,39 @@ EOF
         fi
     fi
 elif [ "$init_system" = "upstart" ]; then
-    # Upstart service configuration
+    # Upstart service configuration.
+    # RHEL/CentOS 6 的 upstart 0.6.5 不认识 setuid、chdir、console none。
+    # 出现任何一个不认识的字段，整个任务都不会加载，initctl start 只报 Unknown job。
     log_info "Using upstart for service management"
     service_file="/etc/init/${service_name}.conf"
     cat > "$service_file" << EOF
 description "${service_desc}"
 
-chdir ${target_dir}
-start on filesystem or runlevel [2345]
-stop on runlevel [!2345]
+start on runlevel [2345] or stopped rc RUNLEVEL=[2345]
+stop on runlevel [016]
 
 respawn
 respawn limit 10 5
 umask 022
 
-console none
-
-setuid ${service_user}
-
-pre-start script
-    test -x ${komari_agent_path} || { stop; exit 0; }
-end script
-
-# Start
 script
+    cd ${target_dir} || true
     exec ${komari_agent_path} ${komari_args}
 end script
 EOF
-    # enable Upstart unit
-    initctl reload-configuration
-    initctl start ${service_name}
+    initctl reload-configuration || true
+    if ! initctl start ${service_name}; then
+        log_error "Upstart 没有把 ${service_name} 拉起来"
+        initctl status ${service_name} || true
+        log_info "任务文件: ${service_file}"
+        exit 1
+    fi
+    sleep 1
+    if ! initctl status ${service_name} 2>/dev/null | grep -q "start/running"; then
+        log_error "服务进程没有保持运行"
+        initctl status ${service_name} || true
+        exit 1
+    fi
     log_success "Upstart service configured and started"
 else
     log_error "Unsupported or unknown init system detected: $init_system"
