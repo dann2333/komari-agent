@@ -286,7 +286,7 @@ extract_exec_line() {
             _cmd_args=$(sed -n 's/^command_args="\(.*\)"$/\1/p' "$_file" | head -n 1)
             printf '%s %s' "$_cmd" "$_cmd_args"
             ;;
-        procd)
+        procd|sysv)
             _cmd=$(sed -n 's/^PROG="\(.*\)"$/\1/p' "$_file" | head -n 1)
             _cmd_args=$(sed -n 's/^ARGS="\(.*\)"$/\1/p' "$_file" | head -n 1)
             printf '%s %s' "$_cmd" "$_cmd_args"
@@ -337,6 +337,8 @@ locate_service_by_name() {
     if [ -f "/etc/init.d/${_name}" ]; then
         if grep -q "USE_PROCD" "/etc/init.d/${_name}" 2>/dev/null; then
             INIT_SYSTEM="procd"
+        elif grep -q "^# chkconfig:" "/etc/init.d/${_name}" 2>/dev/null; then
+            INIT_SYSTEM="sysv"
         else
             INIT_SYSTEM="openrc"
         fi
@@ -446,7 +448,7 @@ service_ctl() {
         systemd)      systemctl "$_action" "${SERVICE_NAME}.service" ;;
         systemd-user) systemctl --user "$_action" "${SERVICE_NAME}.service" ;;
         openrc)       rc-service "$SERVICE_NAME" "$_action" ;;
-        procd)        "/etc/init.d/${SERVICE_NAME}" "$_action" ;;
+        procd|sysv)     "/etc/init.d/${SERVICE_NAME}" "$_action" ;;
         upstart)      initctl "$_action" "$SERVICE_NAME" ;;
         launchd)
             case "$_action" in
@@ -462,7 +464,7 @@ service_is_running() {
         systemd)      systemctl is-active --quiet "${SERVICE_NAME}.service" ;;
         systemd-user) systemctl --user is-active --quiet "${SERVICE_NAME}.service" ;;
         openrc)       rc-service "$SERVICE_NAME" status >/dev/null 2>&1 ;;
-        procd)
+        procd|sysv)
             # 不看命令行。切换后的程序会把 argv 抹掉，用 pgrep 会以为服务没起来。
             for _proc in /proc/[0-9]*; do
                 _exe=$(readlink "$_proc/exe" 2>/dev/null) || continue
@@ -1026,6 +1028,9 @@ apply_args_to_service() {
             replace_first_line "$SERVICE_FILE" '^command_args=' "command_args=\"${NEW_ARGS}\""
             ;;
         procd)
+            replace_first_line "$SERVICE_FILE" '^ARGS=' "ARGS=\"${NEW_ARGS}\""
+            ;;
+        sysv)
             replace_first_line "$SERVICE_FILE" '^ARGS=' "ARGS=\"${NEW_ARGS}\""
             ;;
         upstart)

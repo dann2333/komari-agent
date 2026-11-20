@@ -215,6 +215,11 @@ uninstall_previous() {
         /etc/init.d/${service_name} stop
         /etc/init.d/${service_name} disable
         rm -f "/etc/init.d/${service_name}"
+    elif command -v chkconfig >/dev/null 2>&1 && [ -f "/etc/init.d/${service_name}" ] && grep -q '^# chkconfig:' "/etc/init.d/${service_name}"; then
+        log_info "Stopping and removing existing SysV service..."
+        service ${service_name} stop >/dev/null 2>&1 || /etc/init.d/${service_name} stop >/dev/null 2>&1 || true
+        chkconfig --del ${service_name} >/dev/null 2>&1 || true
+        rm -f "/etc/init.d/${service_name}" "/var/lock/subsys/${service_name}" "/var/run/${service_name}.pid"
     elif command -v initctl >/dev/null 2>&1 && [ -f "/etc/init/${service_name}.conf" ]; then
         log_info "Stopping and removing existing upstart service..."
         initctl stop ${service_name}
@@ -737,7 +742,15 @@ detect_init_system() {
         return
     fi
 
-    # check for Upstart (CentOS 6)
+    # RHEL/CentOS 6 同时有 initctl 和 chkconfig。
+    # chkconfig --list 只认 /etc/rc.d/init.d 里的 SysV 脚本，
+    # 写到 /etc/init/*.conf 的 upstart 任务不会出现在列表里。
+    if command -v chkconfig >/dev/null 2>&1 && [ -d /etc/rc.d/init.d ]; then
+        echo "sysv"
+        return
+    fi
+
+    # check for Upstart (没有 chkconfig 的老 Ubuntu)
     if command -v initctl >/dev/null 2>&1 && [ -d /etc/init ]; then
         echo "upstart"
         return
@@ -1006,9 +1019,88 @@ EOF
         exit 1
     fi
     log_success "Upstart service configured and started"
+elif [ "$init_system" = "sysv" ]; then
+    log_info "Using chkconfig for service management"
+    # 上次若装成了 upstart 任务，先清掉，避免和 SysV 脚本各管各的
+    if [ -f "/etc/init/${service_name}.conf" ]; then
+        initctl stop ${service_name} >/dev/null 2>&1 || true
+        rm -f "/etc/init/${service_name}.conf"
+        initctl reload-configuration >/dev/null 2>&1 || true
+    fi
+    service_file="/etc/init.d/${service_name}"
+    cat > "$service_file" << EOF
+#!/bin/sh
+#
+# ${service_name}    ${service_desc}
+#
+# chkconfig: 2345 99 10
+# description: ${service_desc}
+
+### BEGIN INIT INFO
+# Provides: ${service_name}
+# Required-Start: \$local_fs \$network
+# Required-Stop: \$local_fs \$network
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Description: ${service_desc}
+### END INIT INFO
+
+PROG="${komari_agent_path}"
+ARGS="${komari_args}"
+PIDFILE="/var/run/${service_name}.pid"
+LOCKFILE="/var/lock/subsys/${service_name}"
+
+start() {
+    if [ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE")" 2>/dev/null; then
+        return 0
+    fi
+    cd ${target_dir} || true
+    "\$PROG" \$ARGS >/dev/null 2>&1 &
+    echo \$! > "\$PIDFILE"
+    touch "\$LOCKFILE"
+    return 0
+}
+
+stop() {
+    if [ -f "\$PIDFILE" ]; then
+        kill "\$(cat "\$PIDFILE")" 2>/dev/null || true
+        rm -f "\$PIDFILE"
+    fi
+    rm -f "\$LOCKFILE"
+    return 0
+}
+
+status() {
+    if [ -f "\$PIDFILE" ] && kill -0 "\$(cat "\$PIDFILE")" 2>/dev/null; then
+        echo "${service_name} is running"
+        return 0
+    fi
+    echo "${service_name} is stopped"
+    return 3
+}
+
+case "\$1" in
+    start) start ;;
+    stop) stop ;;
+    status) status ;;
+    restart) stop; start ;;
+    *) echo "Usage: \$0 {start|stop|status|restart}"; exit 2 ;;
+esac
+EOF
+    chmod 755 "$service_file"
+    chkconfig --add ${service_name}
+    chkconfig ${service_name} on
+    service ${service_name} start || "$service_file" start
+    sleep 1
+    if ! "$service_file" status >/dev/null 2>&1; then
+        log_error "SysV 服务没有保持运行"
+        log_info "脚本: ${service_file}"
+        exit 1
+    fi
+    log_success "SysV service configured and started"
 else
     log_error "Unsupported or unknown init system detected: $init_system"
-    log_error "Supported init systems: systemd, openrc, procd, launchd"
+    log_error "Supported init systems: systemd, openrc, procd, launchd, upstart, sysv"
     exit 1
 fi
 

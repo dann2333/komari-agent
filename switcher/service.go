@@ -45,8 +45,13 @@ func locateService(name string) *service {
 	}
 	if p := "/etc/init.d/" + name; isFile(p) {
 		init := "openrc"
-		if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), "USE_PROCD") {
-			init = "procd"
+		if data, err := os.ReadFile(p); err == nil {
+			text := string(data)
+			if strings.Contains(text, "USE_PROCD") {
+				init = "procd"
+			} else if strings.Contains(text, "# chkconfig:") {
+				init = "sysv"
+			}
 		}
 		return &service{Init: init, Name: name, File: p}
 	}
@@ -148,7 +153,7 @@ func parseService(s *service) error {
 	case "openrc":
 		tokens = append(tokens, splitArgs(quotedValue(lines, "command="))...)
 		tokens = append(tokens, splitArgs(quotedValue(lines, "command_args="))...)
-	case "procd":
+	case "procd", "sysv":
 		tokens = append(tokens, splitArgs(quotedValue(lines, "PROG="))...)
 		tokens = append(tokens, splitArgs(quotedValue(lines, "ARGS="))...)
 	case "upstart":
@@ -263,7 +268,7 @@ func (s *service) writeArgs(binary string, args []string) error {
 			lines = append(lines, `command_args="`+joinArgs(args)+`"`)
 			replaced = true
 		}
-	case "procd":
+	case "procd", "sysv":
 		replaceFirst(
 			func(t string) bool { return strings.HasPrefix(t, "PROG=") },
 			func(string) string { return `PROG="` + binary + `"` })
@@ -355,7 +360,7 @@ func (s *service) control(action string) error {
 		return run("systemctl", "--user", action, s.Name+".service")
 	case "openrc":
 		return run("rc-service", s.Name, action)
-	case "procd":
+	case "procd", "sysv":
 		return run(s.File, action)
 	case "upstart":
 		return run("initctl", action, s.Name)
@@ -391,7 +396,7 @@ func (s *service) isRunning() bool {
 		return err == nil && strings.Contains(string(out), "start/running")
 	case "launchd":
 		return run("launchctl", "print", s.launchdDomain()+"/com.komari."+s.Name) == nil
-	case "procd":
+	case "procd", "sysv":
 		return processRunning(s.Binary)
 	}
 	return false
@@ -443,6 +448,9 @@ func (s *service) disable() {
 		_ = s.systemctl("disable", s.Name+".service")
 	case "procd":
 		_ = run(s.File, "disable")
+	case "sysv":
+		_ = run("chkconfig", s.Name, "off")
+		_ = run("chkconfig", "--del", s.Name)
 	}
 	removeServiceLinks(s.Init, s.Name, filepath.Dir(s.File))
 }
@@ -453,6 +461,11 @@ func (s *service) enable() error {
 		return s.systemctl("enable", s.Name+".service")
 	case "procd":
 		return run(s.File, "enable")
+	case "sysv":
+		if err := run("chkconfig", "--add", s.Name); err != nil {
+			return err
+		}
+		return run("chkconfig", s.Name, "on")
 	default:
 		return nil
 	}
