@@ -560,13 +560,16 @@ func installRelease(candidate releaseCandidate) error {
 	return ErrRestartRequired
 }
 
-// DoUpdateWorks 启动后立即检查一次升级，之后每 6 小时复查。
+// updateCheckInterval 是两次升级检查之间的间隔。
+const updateCheckInterval = 2 * time.Hour
+
+// DoUpdateWorks 启动后立即检查一次升级，之后每 2 小时复查。
 // 安装成功需要重启时回调 onRestartRequired 并停止循环。
 func DoUpdateWorks(onRestartRequired func()) {
 	if runScheduledCheck(CheckAndUpdate, onRestartRequired) {
 		return
 	}
-	ticker := time.NewTicker(6 * time.Hour)
+	ticker := time.NewTicker(updateCheckInterval)
 	defer ticker.Stop()
 	runScheduledUpdates(ticker.C, CheckAndUpdate, onRestartRequired)
 }

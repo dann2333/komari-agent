@@ -192,7 +192,7 @@ var RootCmd = &cobra.Command{
 		// 自动更新：后台立即检查一次并按周期复查，避免启动被 GitHub 访问阻塞
 		if !flags.DisableAutoUpdate {
 			go update.DoUpdateWorks(func() {
-				shutdown.shutdown(42)
+				shutdown.shutdown(restartExitCode)
 			})
 		}
 		go server.DoUploadBasicInfoWorks()
@@ -205,7 +205,7 @@ var RootCmd = &cobra.Command{
 			}
 			server.UpdateBasicInfo()
 			server.EstablishWebSocketConnection(func() {
-				shutdown.shutdown(42)
+				shutdown.shutdown(restartExitCode)
 			})
 		}
 	},
@@ -217,6 +217,12 @@ func serviceExit(code int) {
 	if serviceControlled() && code == 0 {
 		pkg_flags.RequestStop()
 		return
+	}
+	if code == restartExitCode {
+		// 更新后就地换成新版本，PID 不变，不依赖服务恢复策略；换不了再照常退出。
+		if err := restartInPlace(); err != nil {
+			pkg_flags.LogStatus("restart in place failed:", err)
+		}
 	}
 	os.Exit(code)
 }
