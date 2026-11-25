@@ -24,10 +24,24 @@ var (
 )
 
 func findSelfPath() string {
-	if exe, err := os.Executable(); err == nil && exe != "" {
+	exe, err := os.Executable()
+	argv0 := ""
+	if len(os.Args) > 0 {
+		argv0 = os.Args[0]
+	}
+	return resolveSelfPath(exe, err, argv0)
+}
+
+// resolveSelfPath 拿不到 /proc/self/exe 时退回 argv[0]，但只认带路径的：
+// 裸名字会经 PATH 找到别的程序，比如系统自己的 rsyslogd。
+func resolveSelfPath(exe string, exeErr error, argv0 string) string {
+	if exeErr == nil && exe != "" {
 		return exe
 	}
-	path, err := exec.LookPath(os.Args[0])
+	if !strings.ContainsAny(argv0, "/") {
+		return ""
+	}
+	path, err := exec.LookPath(argv0)
 	if err != nil && !errors.Is(err, exec.ErrDot) {
 		return ""
 	}

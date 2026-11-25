@@ -3,6 +3,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"regexp"
@@ -17,6 +18,28 @@ const (
 	// restartParentEnv 记下启动子进程的测试进程 PID，替换后父进程应当还是它。
 	restartParentEnv = "KOMARI_TEST_RESTART_PARENT"
 )
+
+// 拿不到 /proc/self/exe 时只能用带路径的 argv[0]；裸名字经 PATH 可能找到别的程序。
+func TestResolveSelfPath(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate the test binary: %v", err)
+	}
+	noProc := errors.New("readlink /proc/self/exe: no such file")
+	for _, tt := range []struct {
+		name, exe, argv0, want string
+		exeErr                 error
+	}{
+		{"the running executable wins", "/opt/agent/rsyslogd", "anything", "/opt/agent/rsyslogd", nil},
+		{"falls back to an argv0 that carries a path", "", self, self, noProc},
+		{"never looks a bare name up in PATH", "", "rsyslogd", "", noProc},
+		{"empty argv0", "", "", "", noProc},
+	} {
+		if got := resolveSelfPath(tt.exe, tt.exeErr, tt.argv0); got != tt.want {
+			t.Errorf("%s: resolveSelfPath() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
 
 // TestRestartInPlace 在子进程里先套上进程名伪装，再调用 restartInPlace：
 // 同一个测试会带着"2"、带着原来的参数再跑一遍，PID 和父进程都必须和替换前一致，

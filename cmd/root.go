@@ -212,8 +212,8 @@ var RootCmd = &cobra.Command{
 }
 
 func serviceExit(code int) {
-	// 正常停止要先报告 SERVICE_STOPPED。更新或出错则直接退出，
-	// 让服务恢复策略把进程拉起来。
+	// 正常停止要先报告 SERVICE_STOPPED。更新后就地换成新版本（见下）；
+	// 其它情况直接退出，让服务恢复策略把进程拉起来。
 	if serviceControlled() && code == 0 {
 		pkg_flags.RequestStop()
 		return
