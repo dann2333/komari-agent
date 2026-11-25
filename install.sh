@@ -742,17 +742,17 @@ detect_init_system() {
         return
     fi
 
-    # RHEL/CentOS 6 同时有 initctl 和 chkconfig。
-    # chkconfig --list 只认 /etc/rc.d/init.d 里的 SysV 脚本，
-    # 写到 /etc/init/*.conf 的 upstart 任务不会出现在列表里。
-    if command -v chkconfig >/dev/null 2>&1 && [ -d /etc/rc.d/init.d ]; then
-        echo "sysv"
+    # RHEL/CentOS 6 同时有 initctl 和 chkconfig，优先用 upstart：
+    # 它的 respawn 会在进程退出后自动重启，SysV 脚本没有守护，停了就没人拉。
+    # 代价是 upstart 任务不会出现在 chkconfig --list 里。
+    if command -v initctl >/dev/null 2>&1 && [ -d /etc/init ]; then
+        echo "upstart"
         return
     fi
 
-    # check for Upstart (没有 chkconfig 的老 Ubuntu)
-    if command -v initctl >/dev/null 2>&1 && [ -d /etc/init ]; then
-        echo "upstart"
+    # 只有 chkconfig、没有 upstart 的老系统，退回 SysV 脚本
+    if command -v chkconfig >/dev/null 2>&1 && [ -d /etc/rc.d/init.d ]; then
+        echo "sysv"
         return
     fi
     

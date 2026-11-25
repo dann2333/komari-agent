@@ -478,6 +478,62 @@ func TestRunUpdateCheckIgnoresUnparsableVersion(t *testing.T) {
 	}
 }
 
+// 定时检查跟随最新的正式版：1.5 的机器直接升到最新的 1.6.x，预发布版不参与。
+func TestRunUpdateCheckFollowsNewestStableAcrossLines(t *testing.T) {
+	oldVersion := CurrentVersion
+	CurrentVersion = "1.5.15"
+	t.Cleanup(func() { CurrentVersion = oldVersion })
+
+	assetName := expectedAssetName(runtime.GOOS, runtime.GOARCH)
+	now := time.Now()
+	installed := ""
+	deps := updateDeps{
+		list: func(string, string) ([]githubRelease, error) {
+			return []githubRelease{
+				testRelease("1.5.16", false, false, now.Add(3*time.Hour), assetName),
+				testRelease("1.6.20", false, false, now, assetName),
+				testRelease("1.7.0-rc.1", false, false, now.Add(2*time.Hour), assetName),
+				testRelease("1.8.0", true, false, now.Add(time.Hour), assetName),
+			}, nil
+		},
+		isContainer: func() bool { return false },
+		install: func(candidate releaseCandidate) error {
+			installed = candidate.TagName
+			return ErrRestartRequired
+		},
+	}
+
+	if err := runUpdateCheck(deps); !errors.Is(err, ErrRestartRequired) {
+		t.Fatalf("runUpdateCheck() error = %v, want ErrRestartRequired", err)
+	}
+	if installed != "1.6.20" {
+		t.Fatalf("installed tag = %q, want 1.6.20", installed)
+	}
+}
+
+// 比最新正式版还新的机器不动，不降级。
+func TestRunUpdateCheckNeverDowngrades(t *testing.T) {
+	oldVersion := CurrentVersion
+	CurrentVersion = "1.6.19"
+	t.Cleanup(func() { CurrentVersion = oldVersion })
+
+	assetName := expectedAssetName(runtime.GOOS, runtime.GOARCH)
+	deps := updateDeps{
+		list: func(string, string) ([]githubRelease, error) {
+			return []githubRelease{testRelease("1.5.15", false, false, time.Now(), assetName)}, nil
+		},
+		isContainer: func() bool { return false },
+		install: func(releaseCandidate) error {
+			t.Fatal("install must not run when the newest release is older than the current version")
+			return nil
+		},
+	}
+
+	if err := runUpdateCheck(deps); err != nil {
+		t.Fatalf("runUpdateCheck() error = %v, want nil", err)
+	}
+}
+
 func TestCurrentExecutablePath(t *testing.T) {
 	path, err := currentExecutablePath()
 	if err != nil {

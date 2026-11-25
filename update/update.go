@@ -715,14 +715,11 @@ func runUpdateCheck(deps updateDeps) error {
 		return nil
 	}
 
-	return checkAndUpdateStable(&current, updateTarget{
-		kind:    targetCurrentLine,
-		version: current,
-		input:   current.String(),
-	}, deps)
+	// 跟随最新的正式版：跨主版本.次版本线也升，不降级，预发布版不参与。
+	return checkAndUpdateStable(&current, updateTarget{kind: targetStableLatest, input: "latest"}, deps)
 }
 
-// CheckAndUpdate checks for a newer patch release within the current major.minor line.
+// CheckAndUpdate upgrades to the newest stable release, across version lines.
 // Snapshot builds track the newest Snapshot-* release instead.
 func CheckAndUpdate() error {
 	updateCheckMu.Lock()
