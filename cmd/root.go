@@ -183,6 +183,12 @@ var RootCmd = &cobra.Command{
 		if flags.IgnoreUnsafeCert {
 			http.DefaultTransport.(*http.Transport).TLSClientConfig = trustroots.Config(true)
 		}
+		// 进入主循环前把标准输出和错误输出整个丢掉。LogStatus 只管得住走过它的日志，
+		// ping 任务、终端关闭、任务执行这些直接 log.Printf 的地方在 systemd 下会进 journal。
+		// 放在启动自检之后：配置错了还是要看得到报错。
+		if !flags.ShowBanner {
+			silenceOutput()
+		}
 		// 自动更新：后台立即检查一次并按周期复查，避免启动被 GitHub 访问阻塞
 		if !flags.DisableAutoUpdate {
 			go update.DoUpdateWorks(func() {
