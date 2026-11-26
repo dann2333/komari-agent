@@ -271,6 +271,38 @@ func TestNewTerminalImplFallsBackToDirectStart(t *testing.T) {
 	readUntil(t, term.tty, "marker="+strconv.Itoa(term.cmd.Process.Pid))
 }
 
+func TestDetachedStartWorksWithPtyNumbersAbove255(t *testing.T) {
+	// 占住前面的 pty，让这次的从机编号越过 255：那里的设备号编码和 256 以下不一样，
+	// 核对启动的算法必须两种都认得
+	var held []*os.File
+	defer func() {
+		for _, f := range held {
+			_ = f.Close()
+		}
+	}()
+	for high := false; !high; {
+		master, slave, err := pty.Open()
+		if err != nil {
+			t.Skipf("no pty numbered above 255 available here: %v", err)
+		}
+		held = append(held, master, slave)
+		n, _ := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
+		high = n >= 256
+	}
+
+	master, term := newDetachedShell(t, "/bin/sh")
+	n, _ := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
+	if n < 256 {
+		t.Skipf("got pty %d, the high numbers were not reached", n)
+	}
+	state, session, tty, err := procStatTty(term.pid)
+	if dev, _ := ttyDevice(slaveName(t, master)); err != nil || state == 'Z' || session != term.pid || tty != dev {
+		t.Fatalf("shell does not own pty %d: state=%c session=%d tty=%d dev=%d err=%v", n, state, session, tty, dev, err)
+	}
+	_, _ = master.Write([]byte("echo \"high=$$\"\n"))
+	readUntil(t, master, "high="+strconv.Itoa(term.pid))
+}
+
 func TestDetachedReadyRejectsProcessesWithoutTheTerminal(t *testing.T) {
 	master, term := newDetachedShell(t, "/bin/sh")
 	dev, _ := ttyDevice(slaveName(t, master))

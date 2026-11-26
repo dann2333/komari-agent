@@ -210,11 +210,13 @@ func ignoresSIGINT(pid int) bool {
 	return false
 }
 
-// ttyDeviceNumber 给出终端设备在 /proc/<pid>/stat 里的设备号：主设备号左移 8 位加次设备号。
+// ttyDeviceNumber 给出终端设备在 /proc/<pid>/stat 里的设备号。内核在那里和 stat 的
+// st_rdev 用的是同一种编码（都是 new_encode_dev），取低 32 位就是；MIPS 上 Rdev
+// 本身是 32 位的。
 func ttyDeviceNumber(path string) (uint64, error) {
 	var st unix.Stat_t
 	if err := unix.Stat(path, &st); err != nil {
 		return 0, err
 	}
-	return uint64(unix.Major(st.Rdev))<<8 | uint64(unix.Minor(st.Rdev)), nil
+	return uint64(uint32(st.Rdev)), nil
 }
