@@ -28,24 +28,26 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # garble 只认它自己被编译时用的 Go 版本，要和下面装的 garble 配套，见 release-build.sh
+          go-version: "1.27.4"
+
+      - name: Install garble
+        run: go install mvdan.cc/garble@v0.18.0
 
       - name: Build static binaries for multi-arch
         env:
-          GOOS: linux
           CGO_ENABLED: 0
         run: |
           VERSION="${{ github.event.release.tag_name }}"
           if [ -z "$VERSION" ]; then
             VERSION="${{ github.sha }}"
           fi
-          LDFLAGS="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}"
 
           echo "Building for linux/amd64..."
-          GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o komari-agent-linux-amd64
+          sh release-build.sh linux amd64 "$VERSION" komari-agent-linux-amd64
 
           echo "Building for linux/arm64..."
-          GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o komari-agent-linux-arm64
+          sh release-build.sh linux arm64 "$VERSION" komari-agent-linux-arm64
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

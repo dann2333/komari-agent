@@ -40,8 +40,20 @@ Do not remove this without changing the agent update and reporting logic. The
 agent uses `update.CurrentVersion` for update checks and reports it as part of
 basic info.
 
-Prefer `go-version-file: go.mod` for release-producing workflows so Actions uses
-the Go version declared by the project.
+Every binary that leaves CI is built by `release-build.sh` at the repository
+root, never by a bare `go build`:
+
+- It builds with [garble](https://github.com/burrowers/garble) (`-literals
+  -tiny`) and limits obfuscation to this module's own packages, so the binary
+  carries no module path, function name, file name or string that identifies
+  the project.
+- garble only works with the Go version it was built with. The workflows
+  therefore pin `go-version: "1.27.4"` and install `mvdan.cc/garble@v0.18.0`.
+  Change both together, and the comment in `release-build.sh` with them.
+- `go version -m` prints nothing for these binaries. To confirm where an asset
+  came from, rebuild the same tag with `release-build.sh` and compare SHA-256.
+- `build_all.ps1` repeats the garble flags for PowerShell; keep it in step
+  with `release-build.sh`.
 
 ## `build.yml`
 
@@ -270,4 +282,6 @@ Before changing these workflows, check:
   publish `latest` for snapshots.
 - Binary asset names still match updater, installer, and Dockerfile expectations.
 - `update.CurrentVersion` is still embedded in all release-producing binaries.
+- All workflows build through `release-build.sh`, and its Go and garble versions
+  match the ones the workflows install.
 - Race protection still prevents stale `main` commits from publishing snapshots.
