@@ -6,11 +6,26 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 
 	cpuid "github.com/klauspost/cpuid/v2"
 )
 
+var (
+	virtualizedOnce   sync.Once
+	virtualizedResult string
+	virtualizedProbes int
+)
+
+// Virtualized 返回虚拟化类型。它在进程存活期间不会变，所以只探测一次：
+// 每次上报都执行 systemd-detect-virt，等于每 5 分钟拉起一个子进程。
 func Virtualized() string {
+	virtualizedOnce.Do(func() { virtualizedResult = detectVirtualization() })
+	return virtualizedResult
+}
+
+func detectVirtualization() string {
+	virtualizedProbes++
 	// Windows: use CPUID to detect hypervisor presence and vendor.
 	if runtime.GOOS == "windows" {
 		return detectByCPUID()
