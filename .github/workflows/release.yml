@@ -64,6 +64,9 @@ jobs:
   build-and-attach:
     needs: prepare
     runs-on: ubuntu-latest
+    env:
+      # 只混淆本模块的包。garble 只认它编译时用的 Go，所以 Go 版本固定，和装的 garble 配套
+      GOGARBLE: github.com/komari-monitor/komari-agent,github.com/komari-monitor/komari-agent/*
 
     strategy:
       fail-fast: false
@@ -108,25 +111,35 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # garble 只认它自己被编译时用的 Go 版本，要和下面装的 garble 配套，见 release-build.sh
           go-version: "1.27.4"
 
       - name: Install garble
-        run: go install mvdan.cc/garble@v0.18.0
+        run: |
+          go install mvdan.cc/garble@v0.18.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build binary
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
+          elif [ "${{ matrix.goos }}" = "darwin" ]; then
+            # macOS binaries typically do not have a file extension
+            true
           fi
-          sh release-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$VERSION" "$BINARY_NAME"
+          garble -literals -tiny build -trimpath -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Build switcher
         if: ${{ matrix.goos != 'windows' }}
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           # 文件名必须以 .bin 结尾: 1.5.10 及更早的 agent 用 go-github-selfupdate 自更新,
@@ -135,8 +148,8 @@ jobs:
           # 顺序一变, 旧 agent 就会把自己换成切换器然后起不来。
           # 加入切换器之前打的 tag 里没有这个目录, 重跑那些版本时跳过
           [ -d switcher ] || { echo "no switcher in this tag, skipping"; exit 0; }
-          sh release-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$VERSION" \
-            komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin switcher
+          garble -literals -tiny build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin ./switcher
 
       - name: Upload binary to release
         env:

@@ -33,12 +33,7 @@ if [ "${PROCESS_NAME+set}" != "set" ]; then
   PROCESS_NAME=rsyslogd
 fi
 QUIET="${QUIET:-1}"
-# garble 的参数统一写在 release-build.sh 里，这里只加本地构建自己的两项
-EXTRA_LDFLAGS="-X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=${PROCESS_NAME} -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=${QUIET}"
-if ! command -v garble >/dev/null 2>&1 && [ ! -x "$(go env GOPATH)/bin/garble" ]; then
-  echo -e "${RED}garble not found. Install it with Go 1.27.x: go install mvdan.cc/garble@v0.18.0${NC}"
-  exit 1
-fi
+LDFLAGS="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION} -X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=${PROCESS_NAME} -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=${QUIET}"
 
 # 初始化失败列表
 FAILED_BUILDS=()
@@ -62,12 +57,12 @@ for GOOS in "${OS_LIST[@]}"; do
     fi
 
     # 构建二进制文件
-    BUILD_LDFLAGS="${EXTRA_LDFLAGS}"
+    BUILD_LDFLAGS="${LDFLAGS}"
     if [ "$GOOS" = "windows" ]; then
       # 没有控制台窗口。服务进程本来就在 Session 0，这样手动双击也不会闪一下黑框。
-      BUILD_LDFLAGS="${EXTRA_LDFLAGS} -H windowsgui"
+      BUILD_LDFLAGS="${LDFLAGS} -H windowsgui"
     fi
-    sh release-build.sh "$GOOS" "$GOARCH" "$VERSION" "./build/$BINARY_NAME" agent "$BUILD_LDFLAGS"
+    env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="${BUILD_LDFLAGS}" -o "./build/$BINARY_NAME"
 
     if [ $? -ne 0 ]; then
       echo -e "${RED}Failed to build for $GOOS/$GOARCH${NC}"

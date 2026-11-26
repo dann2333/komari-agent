@@ -22,25 +22,11 @@ if (-not $version) { $version = 'dev' }
 $version = $version.Trim()
 if ($null -eq $env:PROCESS_NAME) { $processName = 'rsyslogd' } else { $processName = $env:PROCESS_NAME }
 if ($env:QUIET) { $quiet = $env:QUIET } else { $quiet = '1' }
-# Obfuscation flags live in release-build.sh; the garble call below repeats them for PowerShell.
-$env:GOGARBLE = 'github.com/komari-monitor/komari-agent,github.com/komari-monitor/komari-agent/*'
-$extraLdflags = "-X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=$processName -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=$quiet"
+$ldflags = "-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=$version -X github.com/komari-monitor/komari-agent/cmd.compiledProcessName=$processName -X github.com/komari-monitor/komari-agent/cmd.compiledQuiet=$quiet"
 
 # Check go exists
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     Write-Host 'Go toolchain not found in PATH. Please install Go and try again.' -ForegroundColor $Red
-    exit 1
-}
-
-# Check garble exists (installed by "go install" into GOPATH\bin, which may not be in PATH)
-if (-not (Get-Command garble -ErrorAction SilentlyContinue)) {
-    $goBin = Join-Path -Path (go env GOPATH) -ChildPath 'bin'
-    if (Test-Path -Path (Join-Path -Path $goBin -ChildPath 'garble.exe')) {
-        $env:PATH = "$goBin;$env:PATH"
-    }
-}
-if (-not (Get-Command garble -ErrorAction SilentlyContinue)) {
-    Write-Host 'garble not found. Install it with Go 1.27.x: go install mvdan.cc/garble@v0.18.0' -ForegroundColor $Red
     exit 1
 }
 
@@ -66,9 +52,9 @@ foreach ($goos in $osList) {
         $env:GOARCH = $goarch
         $env:CGO_ENABLED = '0'
 
-        $flags = $extraLdflags
-        if ($goos -eq 'windows') { $flags = "$extraLdflags -H windowsgui" }
-        & garble -literals -tiny build -trimpath -ldflags "-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=$version $flags" -o "$outPath" .
+        $flags = $ldflags
+        if ($goos -eq 'windows') { $flags = "$ldflags -H windowsgui" }
+        & go build -trimpath -ldflags $flags -o "$outPath"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Failed to build for $goos/$goarch" -ForegroundColor $Red
             $failedBuilds += "$goos/$goarch"

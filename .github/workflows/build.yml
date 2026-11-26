@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 只混淆本模块的包。garble 只认它编译时用的 Go，所以 Go 版本固定，和装的 garble 配套
+      GOGARBLE: github.com/komari-monitor/komari-agent,github.com/komari-monitor/komari-agent/*
     strategy:
       fail-fast: false
       matrix:
@@ -47,33 +50,40 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # garble 只认它自己被编译时用的 Go 版本，要和下面装的 garble 配套，见 release-build.sh
           go-version: "1.27.4"
 
       - name: Install garble
-        run: go install mvdan.cc/garble@v0.18.0
+        run: |
+          go install mvdan.cc/garble@v0.18.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Build binary
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
           VERSION: ${{ github.sha }}
         run: |
           BINARY_NAME=komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME=${BINARY_NAME}.exe
           fi
-          sh release-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$VERSION" "$BINARY_NAME"
+          garble -literals -tiny build -trimpath -ldflags="-s -w -X github.com/komari-monitor/komari-agent/update.CurrentVersion=${VERSION}" -o $BINARY_NAME
 
       - name: Build switcher
         if: ${{ matrix.goos != 'windows' }}
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
           VERSION: ${{ github.sha }}
         run: |
           # 文件名必须以 .bin 结尾: 1.5.10 及更早的 agent 用 go-github-selfupdate 自更新,
           # 它挑 release 里第一个以 <os>-<arch> 结尾的文件, 不加后缀的话
           # komari-switch-linux-amd64 会和 komari-agent-linux-amd64 撞上,
           # 顺序一变, 旧 agent 就会把自己换成切换器然后起不来。
-          sh release-build.sh ${{ matrix.goos }} ${{ matrix.goarch }} "$VERSION" \
-            komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin switcher
+          garble -literals -tiny build -trimpath -ldflags="-s -w -X main.buildVersion=${VERSION}" \
+            -o komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}.bin ./switcher
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
