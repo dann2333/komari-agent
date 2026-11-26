@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func NewTask(task_id, command string) {
 }
 
 func runTaskCommand(command string) (string, int) {
-	cmd, cleanup, err := buildTaskCommand(command)
+	cmd, status, cleanup, err := buildTaskCommand(command)
 	if err != nil {
 		return err.Error(), -1
 	}
@@ -69,42 +70,92 @@ func runTaskCommand(command string) (string, int) {
 			exitCode = -1
 		}
 	}
+	// 任务的 shell 不是本进程的子进程，等不到它的退出状态，退出码由它自己写进 status
+	if status != nil {
+		if code, ok := status.exitCode(); ok {
+			exitCode = code
+		} else {
+			exitCode = -1
+		}
+	}
 
 	return result, exitCode
 }
 
-func buildTaskCommand(command string) (*exec.Cmd, func(), error) {
+// buildTaskCommand 准备执行任务的命令。Unix 上任务的 shell 不是本进程的子进程，
+// 它的退出码从 status 读；Windows 上 status 为 nil，看 cmd 的退出状态就行。
+func buildTaskCommand(command string) (*exec.Cmd, *taskStatus, func(), error) {
 	var cmd *exec.Cmd
+	var status *taskStatus
+	cleanup := func() {}
 	if runtime.GOOS == "windows" {
 		scriptFile, err := os.CreateTemp("", "svc-*.ps1")
 		if err != nil {
-			return nil, func() {}, err
+			return nil, nil, cleanup, err
 		}
-		cleanup := func() {
+		cleanup = func() {
 			_ = os.Remove(scriptFile.Name())
 		}
 		if _, err := scriptFile.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
 			_ = scriptFile.Close()
 			cleanup()
-			return nil, func() {}, err
+			return nil, nil, cleanup, err
 		}
 		script := "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n" + command
 		if _, err := scriptFile.WriteString(script); err != nil {
 			_ = scriptFile.Close()
 			cleanup()
-			return nil, func() {}, err
+			return nil, nil, cleanup, err
 		}
 		if err := scriptFile.Close(); err != nil {
 			cleanup()
-			return nil, func() {}, err
+			return nil, nil, cleanup, err
 		}
 		cmd = exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptFile.Name())
-		return cmd, cleanup, nil
-	} else {
+	} else if flags.DisableProcessMask || os.Getpid() == 1 {
+		// 关掉伪装，或者 agent 自己就是 PID 1（容器里，孤儿还是被它收养）时，照旧直接启动
 		cmd = exec.Command("sh", "-s")
 		cmd.Stdin = strings.NewReader(command)
+	} else {
+		// 任务不挂在 agent 名下，见 detachedTaskCommand
+		var err error
+		if status, err = newTaskStatus(); err != nil {
+			return nil, nil, cleanup, err
+		}
+		cleanup = status.close
+		cmd = detachedTaskCommand(command, status.w)
 	}
-	return cmd, func() {}, nil
+	return cmd, status, cleanup, nil
+}
+
+// taskStatus 是任务回报退出码用的管道。Unix 上任务的 shell 不是本进程的子进程，
+// 等不到它的退出状态，包装它的 shell 退出前会把退出码写进来。
+type taskStatus struct {
+	r, w *os.File
+}
+
+func newTaskStatus() (*taskStatus, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	return &taskStatus{r: r, w: w}, nil
+}
+
+// exitCode 关掉本进程持有的写端再读，包装进程一退出就能读到 EOF。
+func (s *taskStatus) exitCode() (int, bool) {
+	_ = s.w.Close()
+	data, err := io.ReadAll(s.r)
+	code, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || convErr != nil {
+		return 0, false
+	}
+	return code, true
+}
+
+func (s *taskStatus) close() {
+	_ = s.r.Close()
+	_ = s.w.Close()
 }
 
 func appendErrorResult(result, err string) string {

@@ -18,6 +18,7 @@ import (
 	"github.com/komari-monitor/komari-agent/monitoring/netstatic"
 	monitoring "github.com/komari-monitor/komari-agent/monitoring/unit"
 	"github.com/komari-monitor/komari-agent/server"
+	"github.com/komari-monitor/komari-agent/terminal"
 	"github.com/komari-monitor/komari-agent/update"
 	"github.com/spf13/cobra"
 
@@ -245,6 +246,11 @@ func runCommand() error {
 }
 
 func Execute() {
+	// 带着 AGENT_SPAWN 重新执行自己的那一次不是 agent：它起一个子进程就退出，
+	// 好让 Web 终端的 shell 不挂在 agent 名下（见 terminal.RunSpawnHelper）
+	if handled, code := terminal.RunSpawnHelper(); handled {
+		os.Exit(code)
+	}
 	if entered, err := runAsWindowsService(runCommand); entered {
 		if err != nil {
 			log.Println(err)

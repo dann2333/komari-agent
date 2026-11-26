@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildTaskCommandCreatesPowerShellScriptWindows(t *testing.T) {
-	cmd, cleanup, err := buildTaskCommand("Write-Output 'hello'")
+	cmd, _, cleanup, err := buildTaskCommand("Write-Output 'hello'")
 	if err != nil {
 		t.Fatalf("buildTaskCommand returned error: %v", err)
 	}
