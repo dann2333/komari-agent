@@ -7,6 +7,9 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
@@ -139,26 +142,68 @@ func GetIPAddress() (ipv4, ipv6 string, err error) {
 		}
 	}
 
-	if flags.CustomIpv4 != "" {
-		ipv4 = flags.CustomIpv4
-	} else {
-		ipv4, err = GetIPv4Address()
-		if err != nil {
+	// 公网地址不用每次上报都去问第三方接口：查到后缓存 publicIPTTL，网卡变了才重查。
+	// 查不到不缓存，下次上报接着查。
+	publicIPMu.Lock()
+	defer publicIPMu.Unlock()
+	interfaces := interfaceFingerprint()
+	if age := time.Since(publicIP.at); publicIP.ipv4 != "" && publicIP.interfaces == interfaces && age >= 0 && age < publicIPTTL {
+		return publicIP.ipv4, publicIP.ipv6, nil
+	}
+	ipv4, ipv6 = flags.CustomIpv4, flags.CustomIpv6
+	if ipv4 == "" {
+		if ipv4, err = lookupIPv4(); err != nil {
 			log.Printf("Get IPV4 Error: %v", err)
 			ipv4 = ""
 		}
 	}
-	if flags.CustomIpv6 != "" {
-		ipv6 = flags.CustomIpv6
-	} else {
-		ipv6, err = GetIPv6Address()
-		if err != nil {
+	if ipv6 == "" {
+		if ipv6, err = lookupIPv6(); err != nil {
 			log.Printf("Get IPV6 Error: %v", err)
 			ipv6 = ""
 		}
 	}
+	publicIP = publicIPEntry{at: time.Now(), interfaces: interfaces, ipv4: ipv4, ipv6: ipv6}
 
 	return ipv4, ipv6, nil
+}
+
+type publicIPEntry struct {
+	at         time.Time
+	interfaces string
+	ipv4       string
+	ipv6       string
+}
+
+var (
+	publicIPTTL = time.Hour
+	publicIPMu  sync.Mutex
+	publicIP    publicIPEntry
+
+	// 测试里替换，用来数查了几次
+	lookupIPv4 = GetIPv4Address
+	lookupIPv6 = GetIPv6Address
+)
+
+// interfaceFingerprint 把每张网卡的名字、状态和地址拼起来，任何一张网卡变了它就变。
+func interfaceFingerprint() string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	lines := make([]string, 0, 2*len(interfaces))
+	for _, iface := range interfaces {
+		lines = append(lines, iface.Name+" "+iface.Flags.String())
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			lines = append(lines, iface.Name+" "+addr.String())
+		}
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
 }
 
 // getIPFromInterfaces 从指定的网卡接口获取 IPv4 和 IPv6 地址
