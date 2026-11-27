@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/komari-monitor/komari-agent/internal/trustroots"
+	"github.com/komari-monitor/komari-agent/internal/ua"
 )
 
 // 连不上和连上了不给响应都要早点放弃 —— 后面还有十来个镜像等着试。
@@ -105,7 +106,7 @@ func newRequest(url string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "curl/8.0.1")
+	req.Header.Set("User-Agent", ua.UserAgent)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	return req, nil
 }

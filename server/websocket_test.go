@@ -56,3 +56,45 @@ func TestReconnectBackoff(t *testing.T) {
 		prev = got
 	}
 }
+
+// TestJitter 验证抖动落在 ±30% 内, 非正数原样返回
+func TestJitter(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		if got := jitter(d); got != d {
+			t.Errorf("jitter(%v) = %v, want %v", d, got, d)
+		}
+	}
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 200; i++ {
+		got := jitter(10 * time.Second)
+		if got < 7*time.Second || got > 13*time.Second {
+			t.Fatalf("jitter(10s) = %v, 超出 ±30%%", got)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 100 {
+		t.Errorf("jitter(10s) 200 次只出现 %d 种取值, 没有真正随机", len(seen))
+	}
+}
+
+// TestReconnectWait 验证回退模式的等待带抖动且有 1 秒下限
+func TestReconnectWait(t *testing.T) {
+	original := flags.ReconnectInterval
+	t.Cleanup(func() { flags.ReconnectInterval = original })
+
+	for _, interval := range []int{0, -3, 1} {
+		flags.ReconnectInterval = interval
+		for i := 0; i < 50; i++ {
+			if got := reconnectWait(); got < 700*time.Millisecond || got > 1300*time.Millisecond {
+				t.Fatalf("ReconnectInterval=%d 时 reconnectWait() = %v, 不在 1s±30%% 内", interval, got)
+			}
+		}
+	}
+
+	flags.ReconnectInterval = 5
+	for i := 0; i < 50; i++ {
+		if got := reconnectWait(); got < 3500*time.Millisecond || got > 6500*time.Millisecond {
+			t.Fatalf("reconnectWait() = %v, 不在 5s±30%% 内", got)
+		}
+	}
+}

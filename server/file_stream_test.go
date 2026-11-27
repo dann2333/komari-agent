@@ -104,7 +104,11 @@ func TestSendDownloadStreamUsesRawHTTPBody(t *testing.T) {
 
 func TestFileStreamClientUsesHTTP11(t *testing.T) {
 	client := fileStreamHTTPClient()
-	transport, ok := client.Transport.(*http.Transport)
+	roundTripper := client.Transport
+	if wrapped, ok := roundTripper.(interface{ Unwrap() http.RoundTripper }); ok {
+		roundTripper = wrapped.Unwrap()
+	}
+	transport, ok := roundTripper.(*http.Transport)
 	if !ok {
 		t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
 	}

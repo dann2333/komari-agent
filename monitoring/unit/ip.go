@@ -14,18 +14,28 @@ import (
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/tlsfp"
 	"github.com/komari-monitor/komari-agent/internal/trustroots"
+	"github.com/komari-monitor/komari-agent/internal/ua"
 )
+
+// dialV4 / dialV6 锁死地址族：公网 IP 探测必须分别从 v4 / v6 出口出去。
+var dialV4 = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := dnsresolver.GetNetDialer(15 * time.Second)
+	return dialer.DialContext(ctx, "tcp4", addr)
+}
+var dialV6 = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := dnsresolver.GetNetDialer(15 * time.Second)
+	return dialer.DialContext(ctx, "tcp6", addr)
+}
 
 var (
 	// 创建适用于IPv4和IPv6的HTTP客户端
 	ipv4HTTPClient = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				dialer := dnsresolver.GetNetDialer(15 * time.Second)
-				return dialer.DialContext(ctx, "tcp4", addr) // 锁v4防止出现问题
-			},
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialV4,
+			DialTLSContext:        tlsfp.Wrap(dialV4, trustroots.Config(false), 10*time.Second),
 			MaxIdleConns:          10,
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
@@ -36,11 +46,9 @@ var (
 	}
 	ipv6HTTPClient = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				dialer := dnsresolver.GetNetDialer(15 * time.Second)
-				return dialer.DialContext(ctx, "tcp6", addr) // 锁v6防止出现问题
-			},
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           dialV6,
+			DialTLSContext:        tlsfp.Wrap(dialV6, trustroots.Config(false), 10*time.Second),
 			MaxIdleConns:          10,
 			IdleConnTimeout:       30 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
@@ -49,7 +57,7 @@ var (
 		},
 		Timeout: 15 * time.Second,
 	}
-	userAgent = "curl/8.0.1"
+	userAgent = ua.UserAgent
 )
 
 func GetIPv4Address() (string, error) {

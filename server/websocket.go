@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
 	"github.com/komari-monitor/komari-agent/dnsresolver"
+	"github.com/komari-monitor/komari-agent/internal/tlsfp"
 	"github.com/komari-monitor/komari-agent/internal/trustroots"
 	"github.com/komari-monitor/komari-agent/monitoring"
 	v2 "github.com/komari-monitor/komari-agent/protocol/v2"
@@ -90,7 +92,7 @@ func EstablishWebSocketConnection(onRestartRequired func()) {
 					if retry > flags.MaxRetries {
 						break
 					}
-					if !sleepOrStop(reconnectBackoff(retry)) {
+					if !sleepOrStop(jitter(reconnectBackoff(retry))) {
 						return
 					}
 				}
@@ -219,6 +221,24 @@ func reconnectBackoff(attempt int) time.Duration {
 	return delay
 }
 
+// jitter 给等待时间加 ±30% 的随机偏移。面板离线期间的反复重连若按固定节拍进行，
+// 在网络侧就是一个零抖动的周期信号，而这是 beacon 检测最认的形状。
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return time.Duration(float64(d) * (0.7 + 0.6*rand.Float64()))
+}
+
+// reconnectWait 是回退模式里两次尝试之间的间隔：--reconnect-interval 带抖动，最短 1 秒。
+func reconnectWait() time.Duration {
+	d := time.Duration(flags.ReconnectInterval) * time.Second
+	if d < time.Second {
+		d = time.Second
+	}
+	return jitter(d)
+}
+
 func buildWebSocketEndpoint() string {
 	websocketEndpoint := strings.TrimSuffix(flags.Endpoint, "/") + "/api/clients/v2/rpc?token=" + flags.Token
 	websocketEndpoint = "ws" + strings.TrimPrefix(websocketEndpoint, "http")
@@ -238,8 +258,8 @@ func runPostFallback(websocketEndpoint string, interval float64, onRestartRequir
 
 	reportTicker := time.NewTicker(time.Duration(interval * float64(time.Second)))
 	defer reportTicker.Stop()
-	reconnectTicker := time.NewTicker(time.Duration(flags.ReconnectInterval) * time.Second)
-	defer reconnectTicker.Stop()
+	reconnect := time.NewTimer(reconnectWait())
+	defer reconnect.Stop()
 
 	for {
 		select {
@@ -255,12 +275,13 @@ func runPostFallback(websocketEndpoint string, interval float64, onRestartRequir
 			}
 			clearV2AckEventIDs(ackIDs)
 			processV2ResponseEvents(resp, onRestartRequired)
-		case <-reconnectTicker.C:
+		case <-reconnect.C:
 			conn, err := connectWebSocket(websocketEndpoint)
 			if err == nil {
 				return conn, nil
 			}
 			pkg_flags.LogStatus("POST fallback WebSocket recovery failed:", err)
+			reconnect.Reset(reconnectWait())
 		}
 	}
 }
@@ -284,7 +305,7 @@ func runV2PullLoop(ctx context.Context, onRestartRequired func()) {
 				return
 			}
 			pkg_flags.LogStatus("Failed to POST v2 pull:", err)
-			timer := time.NewTimer(time.Duration(flags.ReconnectInterval) * time.Second)
+			timer := time.NewTimer(reconnectWait())
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -424,7 +445,7 @@ func markV2EventSeen(id string) bool {
 func connectWebSocket(websocketEndpoint string) (*ws.SafeConn, error) {
 	dialer := newWSDialer()
 
-	conn, resp, err := dialer.Dial(websocketEndpoint, nil)
+	conn, resp, err := dialer.Dial(websocketEndpoint, wsHeaders)
 	if err != nil {
 		if resp != nil && resp.StatusCode != 101 {
 			return nil, &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
@@ -571,7 +592,7 @@ func establishTerminalConnection(token, id, endpoint string) {
 	established := false
 	for time.Now().Before(deadline) {
 		dialer := newWSDialer()
-		conn, resp, err := dialer.Dial(endpoint, nil)
+		conn, resp, err := dialer.Dial(endpoint, wsHeaders)
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
@@ -647,5 +668,7 @@ func newWSDialer() *websocket.Dialer {
 		EnableCompression: !flags.DisableCompression,
 		TLSClientConfig:   trustroots.Config(flags.IgnoreUnsafeCert),
 	}
+	// 直连时用 OpenSSL 形状的 ClientHello 握手；配了代理是 nil，gorilla 照旧自己包 tls.Client
+	d.NetDialTLSContext = tlsfp.Wrap(d.NetDialContext, d.TLSClientConfig, d.HandshakeTimeout)
 	return d
 }

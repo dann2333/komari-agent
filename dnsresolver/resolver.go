@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pkg_flags "github.com/komari-monitor/komari-agent/cmd/flags"
+	"github.com/komari-monitor/komari-agent/internal/tlsfp"
 	"github.com/komari-monitor/komari-agent/internal/trustroots"
 )
 
@@ -175,6 +176,8 @@ func buildTransportWithPreferenceAndHTTP2(timeout time.Duration, tlsConfig *tls.
 		// HTTP/2 protocol upgrade in net/http.
 		transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	}
+	// 直连时用 OpenSSL 形状的 ClientHello 握手；配了代理返回 nil，照旧走 crypto/tls
+	transport.DialTLSContext = tlsfp.Wrap(transport.DialContext, tlsConfig, transport.TLSHandshakeTimeout)
 	return transport
 }
 
@@ -206,7 +209,7 @@ func getHTTPClient(timeout time.Duration, preferIPVersion string, forceHTTP2 boo
 		return client
 	}
 	client := &http.Client{
-		Transport: buildTransportWithPreferenceAndHTTP2(timeout, trustroots.Config(flags.IgnoreUnsafeCert), preferIPVersion, forceHTTP2),
+		Transport: withUserAgent(buildTransportWithPreferenceAndHTTP2(timeout, trustroots.Config(flags.IgnoreUnsafeCert), preferIPVersion, forceHTTP2)),
 		Timeout:   timeout,
 	}
 	httpClients[key] = client
