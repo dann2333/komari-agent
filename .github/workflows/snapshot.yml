@@ -143,8 +143,49 @@ jobs:
             komari-agent-${{ matrix.goos }}-${{ matrix.goarch }}*
             komari-switch-${{ matrix.goos }}-${{ matrix.goarch }}*
 
+  # Windows 7 / Server 2008 R2 / 2012 只能跑打过补丁的 Go 1.24 产物，见 legacy-windows/README.md
+  build-legacy-windows:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, 386]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up stock Go 1.24.13
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.13"
+
+      - name: Cache patched toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/go-legacy
+          key: legacy-toolchain-go1.24.13-${{ hashFiles('legacy-windows/patch.py', 'legacy-windows/toolchain.sh') }}
+
+      - name: Build patched toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: bash legacy-windows/toolchain.sh "$(go env GOROOT)" "$HOME/go-legacy"
+
+      - name: Build binary
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          bash legacy-windows/build.sh "$HOME/go-legacy" \
+            "komari-agent-windows-${{ matrix.goarch }}-legacy.exe" "${{ matrix.goarch }}" "${VERSION}"
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: komari-agent-windows-${{ matrix.goarch }}-legacy
+          path: komari-agent-windows-${{ matrix.goarch }}-legacy.exe
+
   publish-snapshot-release:
-    needs: [prepare, build-and-attach-binaries]
+    needs: [prepare, build-and-attach-binaries, build-legacy-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

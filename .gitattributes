@@ -1,1 +1,3 @@
 * text=auto
+# cmd 脚本会被直接下载到老系统上跑，仓库里就得是 CRLF（cmd 对 LF-only 的 goto 标签不可靠）
+legacy-windows/install-legacy.cmd -text

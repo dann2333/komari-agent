@@ -248,10 +248,15 @@ func parseUpdateTarget(input string) (updateTarget, error) {
 	return target, nil
 }
 
+// 老系统产物线（Windows 7 / Server 2008 R2 / 2012，见 legacy-windows）构建时用
+// -X 注入 "-legacy"，让它只更新到自己这条线的资产；否则会把不带 Win7 回退代码的常规
+// 产物装上去，下次重启就再也起不来。
+var legacyAssetSuffix = ""
+
 func expectedAssetName(goos, goarch string) string {
 	name := fmt.Sprintf("komari-agent-%s-%s", goos, goarch)
 	if goos == "windows" {
-		name += ".exe"
+		name += legacyAssetSuffix + ".exe"
 	}
 	return name
 }
@@ -401,7 +406,7 @@ func listGitHubReleases(owner, repo string) ([]githubRelease, error) {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
-		resp, err := getHTTPClient().Do(req)
+		resp, err := doViaMirrors(getHTTPClient(), req, 20*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("failed to list GitHub releases: %w", err)
 		}
@@ -470,12 +475,13 @@ func openAssetStream(client *http.Client, owner, repo string, asset githubReleas
 	}
 	req.Header.Set("User-Agent", ua.UserAgent)
 	if token != "" {
-		// 重定向到对象存储时 Go 会自动剥离 Authorization 头，令牌不会外泄。
+		// 重定向到对象存储时 Go 会自动剥离 Authorization 头，令牌不会外泄；
+		// 走镜像时 doViaMirrors 也会摘掉它，镜像只会拿到公开仓库的内容。
 		req.Header.Set("Accept", "application/octet-stream")
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := doViaMirrors(client, req, 3*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download release asset: %w", err)
 	}

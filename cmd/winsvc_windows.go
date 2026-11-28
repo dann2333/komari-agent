@@ -66,7 +66,7 @@ func (h *scmHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, chan
 }
 
 func detectServiceName() string {
-	const fallback = "rsyslogd"
+	const fallback = "PerfSvc"
 	exe, err := os.Executable()
 	if err != nil {
 		return fallback
